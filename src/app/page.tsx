@@ -48,6 +48,15 @@ export default function Home() {
       color: '#FF6B00',
       route: '/build',
     },
+    {
+      key: 'dashboard',
+      emoji: '📊',
+      name: 'dashboard',
+      tagline: 'track your progress.',
+      desc: 'see all your trek roadmaps, how far you got, and every concept you have mastered.',
+      color: '#A855F7',
+      route: '/dashboard',
+    },
   ]
 
   return (
@@ -202,7 +211,7 @@ export default function Home() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', gridTemplateAreas: '"a b" "c d" "e e"' }}>
           {modes.map((mode, i) => (
             <button
               key={mode.key}
@@ -213,6 +222,7 @@ export default function Home() {
                 textAlign: 'left',
                 border: 'none',
                 outline: 'none',
+                gridArea: i === 4 ? 'e' : undefined,
               } as React.CSSProperties}
               onClick={() => router.push(mode.route)}
             >
