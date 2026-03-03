@@ -12,7 +12,7 @@ export default function Home() {
     <main className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-xl">
         <h1 className="text-3xl font-semibold tracking-tight text-white mb-1">assign</h1>
-        <p className="text-zinc-500 text-sm mb-12">what do you want to do today?</p>
+        <p className="text-zinc-500 text-sm mb-12">what do you want to learn today?</p>
 
         <div className="space-y-4">
           <button
