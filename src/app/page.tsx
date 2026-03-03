@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useRouter } from 'next/navigation'
 
 interface Message {
   role: 'assistant' | 'user'
@@ -13,11 +15,25 @@ export default function Home() {
   ])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [user, setUser] = useState<any>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const router = useRouter()
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) router.push('/login')
+      else setUser(session.user)
+    })
+  }, [router])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  const signOut = async () => {
+    await supabase.auth.signOut()
+    router.push('/login')
+  }
 
   const send = async () => {
     if (!input.trim()) return
@@ -38,13 +54,20 @@ export default function Home() {
     setLoading(false)
   }
 
+  if (!user) return null
+
   return (
     <main className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center px-4">
       <div className="w-full max-w-xl flex flex-col h-screen py-8">
         
-        <div className="mb-6">
-          <h1 className="text-2xl font-semibold tracking-tight text-white">assign</h1>
-          <p className="text-xs text-zinc-500 mt-1">learn by explaining</p>
+        <div className="mb-6 flex justify-between items-center">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-white">assign</h1>
+            <p className="text-xs text-zinc-500 mt-1">learn by explaining</p>
+          </div>
+          <button onClick={signOut} className="text-xs text-zinc-500 hover:text-white transition">
+            sign out
+          </button>
         </div>
 
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">
