@@ -1,64 +1,243 @@
 'use client'
 
-import { useState } from 'react'
 import { useRouter } from 'next/navigation'
-
-type Mode = 'spark' | 'trek' | 'recall' | null
+import { useEffect, useState } from 'react'
 
 export default function Home() {
   const router = useRouter()
+  const [visible, setVisible] = useState(false)
+
+  useEffect(() => {
+    setTimeout(() => setVisible(true), 100)
+  }, [])
+
+  const modes = [
+    {
+      key: 'spark',
+      emoji: '⚡',
+      name: 'spark',
+      tagline: 'stuck on one thing?',
+      desc: 'five minutes. one concept. you explain it back or we don\'t move on.',
+      color: '#FFE500',
+      route: '/spark',
+    },
+    {
+      key: 'trek',
+      emoji: '🗺️',
+      name: 'trek',
+      tagline: 'learn it end to end.',
+      desc: 'assign maps the whole topic. walks you through it piece by piece. nothing skipped.',
+      color: '#00FF87',
+      route: '/trek',
+    },
+    {
+      key: 'recall',
+      emoji: '🧠',
+      name: 'recall',
+      tagline: 'think you know it?',
+      desc: 'prove it. assign finds exactly what broke down and fixes only that.',
+      color: '#FF2D78',
+      route: '/recall',
+    },
+    {
+      key: 'build',
+      emoji: '🛠️',
+      name: 'build',
+      tagline: 'code it yourself.',
+      desc: 'assign never writes it for you. it asks until you understand what you\'re doing.',
+      color: '#FF6B00',
+      route: '/build',
+    },
+  ]
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center px-4">
-      <div className="w-full max-w-xl">
-        <h1 className="text-3xl font-semibold tracking-tight text-white mb-1">assign</h1>
-        <p className="text-zinc-500 text-sm mb-12">what do you want to learn today?</p>
+    <main style={{
+      minHeight: '100vh',
+      background: '#080808',
+      color: '#fff',
+      fontFamily: "'Syne', sans-serif",
+      overflow: 'hidden',
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
 
-        <div className="space-y-4">
-          <button
-            onClick={() => router.push('/spark')}
-            className="w-full text-left bg-zinc-900 hover:bg-zinc-800 transition rounded-2xl px-6 py-5 group"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-medium text-lg">spark ⚡</span>
-              <span className="text-zinc-600 text-xs group-hover:text-zinc-400 transition">quick session →</span>
-            </div>
-            <p className="text-zinc-400 text-sm leading-relaxed">stuck on one specific thing? explain it to me and i'll break it down until you actually get it. five minutes, one concept, done.</p>
-          </button>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
 
-          <button
-            onClick={() => router.push('/trek')}
-            className="w-full text-left bg-zinc-900 hover:bg-zinc-800 transition rounded-2xl px-6 py-5 group"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-medium text-lg">trek 🗺️</span>
-              <span className="text-zinc-600 text-xs group-hover:text-zinc-400 transition">full journey →</span>
-            </div>
-            <p className="text-zinc-400 text-sm leading-relaxed">want to understand something end to end? tell me the topic and we'll go through it together, piece by piece, until the whole thing makes sense.</p>
-          </button>
+        .grain {
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          z-index: 0;
+          opacity: 0.035;
+          background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
+        }
 
-          <button
-            onClick={() => router.push('/recall')}
-            className="w-full text-left bg-zinc-900 hover:bg-zinc-800 transition rounded-2xl px-6 py-5 group"
-          >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-medium text-lg">recall 🧠</span>
-              <span className="text-zinc-600 text-xs group-hover:text-zinc-400 transition">test yourself →</span>
-            </div>
-            <p className="text-zinc-400 text-sm leading-relaxed">learned something recently? let's find out what actually stuck. i'll ask you questions, catch the gaps, and fix only what's broken.</p>
-          </button>
+        .hero-text {
+          opacity: 0;
+          transform: translateY(30px);
+          transition: opacity 0.8s ease, transform 0.8s ease;
+        }
+        .hero-text.visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
 
-          <button
-            onClick={() => router.push('/build')}
-            className="w-full text-left bg-zinc-900 hover:bg-zinc-800 transition rounded-2xl px-6 py-5 group"
+        .mode-card {
+          background: #111;
+          border: 1px solid #1a1a1a;
+          border-radius: 20px;
+          padding: 28px;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          position: relative;
+          overflow: hidden;
+          opacity: 0;
+          transform: translateY(20px);
+        }
+        .mode-card.visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
+        .mode-card:hover {
+          border-color: var(--accent);
+          transform: translateY(-3px);
+          background: #141414;
+        }
+        .mode-card:hover .arrow {
+          transform: translateX(4px);
+        }
+        .mode-card:hover .card-glow {
+          opacity: 1;
+        }
+
+        .card-glow {
+          position: absolute;
+          top: 0; left: 0; right: 0;
+          height: 1px;
+          background: var(--accent);
+          opacity: 0;
+          transition: opacity 0.2s ease;
+        }
+
+        .arrow {
+          transition: transform 0.2s ease;
+          display: inline-block;
+        }
+
+        .nav-dot {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #FFE500;
+          display: inline-block;
+          animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 1; transform: scale(1); }
+          50% { opacity: 0.5; transform: scale(0.8); }
+        }
+
+        .tagline-word {
+          display: inline-block;
+          opacity: 0;
+          transform: translateY(20px);
+          transition: opacity 0.5s ease, transform 0.5s ease;
+        }
+        .tagline-word.visible {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      `}</style>
+
+      <div className="grain" />
+
+      <div style={{ position: 'relative', zIndex: 1, maxWidth: '720px', margin: '0 auto', padding: '40px 24px 80px' }}>
+
+        <nav style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '80px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span className="nav-dot" />
+            <span style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.5px' }}>assign</span>
+          </div>
+          <span style={{ fontSize: '11px', color: '#444', fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em' }}>
+            BETA
+          </span>
+        </nav>
+
+        <div style={{ marginBottom: '72px' }}>
+          <div
+            className={`hero-text ${visible ? 'visible' : ''}`}
+            style={{ transitionDelay: '0.1s' }}
           >
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-white font-medium text-lg">build 🛠️</span>
-              <span className="text-zinc-600 text-xs group-hover:text-zinc-400 transition">code with assign →</span>
+            <div style={{
+              fontSize: 'clamp(52px, 8vw, 88px)',
+              fontWeight: 800,
+              lineHeight: 0.95,
+              letterSpacing: '-3px',
+              marginBottom: '24px',
+            }}>
+              <span style={{ display: 'block', color: '#fff' }}>the answer</span>
+              <span style={{ display: 'block', color: '#fff' }}>is not</span>
+              <span style={{ display: 'block', color: '#FFE500' }}>the point.</span>
             </div>
-            <p className="text-zinc-400 text-sm leading-relaxed">building something and stuck? write your code, assign watches, catches your mistakes, and asks you questions until you actually understand what you wrote.</p>
-          </button>
+          </div>
+
+          <div
+            className={`hero-text ${visible ? 'visible' : ''}`}
+            style={{ transitionDelay: '0.3s' }}
+          >
+            <p style={{
+              fontSize: '16px',
+              color: '#666',
+              lineHeight: 1.6,
+              maxWidth: '420px',
+              fontWeight: 400,
+            }}>
+              assign doesn't explain and move on.
+              it asks until you can explain it back.
+              that's the only moment learning actually happens.
+            </p>
+          </div>
         </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+          {modes.map((mode, i) => (
+            <button
+              key={mode.key}
+              className={`mode-card ${visible ? 'visible' : ''}`}
+              style={{
+                '--accent': mode.color,
+                transitionDelay: `${0.4 + i * 0.08}s`,
+                textAlign: 'left',
+                border: 'none',
+                outline: 'none',
+              } as React.CSSProperties}
+              onClick={() => router.push(mode.route)}
+            >
+              <div className="card-glow" />
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                <span style={{ fontSize: '22px' }}>{mode.emoji}</span>
+                <span className="arrow" style={{ color: '#333', fontSize: '16px' }}>→</span>
+              </div>
+              <div style={{ fontSize: '18px', fontWeight: 700, color: '#fff', marginBottom: '4px', letterSpacing: '-0.3px' }}>
+                {mode.name}
+              </div>
+              <div style={{ fontSize: '11px', color: mode.color, fontFamily: "'DM Mono', monospace", marginBottom: '10px', letterSpacing: '0.03em' }}>
+                {mode.tagline}
+              </div>
+              <p style={{ fontSize: '13px', color: '#555', lineHeight: 1.5 }}>
+                {mode.desc}
+              </p>
+            </button>
+          ))}
+        </div>
+
+        <div style={{ marginTop: '48px', padding: '20px 24px', background: '#0e0e0e', borderRadius: '14px', border: '1px solid #1a1a1a' }}>
+          <p style={{ fontSize: '12px', color: '#333', fontFamily: "'DM Mono', monospace", textAlign: 'center', letterSpacing: '0.03em' }}>
+            used by students who are tired of feeling like they learned something when they didn't
+          </p>
+        </div>
+
       </div>
     </main>
   )
