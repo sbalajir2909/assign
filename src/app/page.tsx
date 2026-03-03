@@ -17,7 +17,7 @@ export default function Home() {
       emoji: '⚡',
       name: 'spark',
       tagline: 'stuck on one thing?',
-      desc: 'five minutes. one concept. you explain it back or we don\'t move on.',
+      desc: "five minutes. one concept. you explain it back or we don't move on.",
       color: '#FFE500',
       route: '/spark',
     },
@@ -44,7 +44,7 @@ export default function Home() {
       emoji: '🛠️',
       name: 'build',
       tagline: 'code it yourself.',
-      desc: 'assign never writes it for you. it asks until you understand what you\'re doing.',
+      desc: "assign never writes it for you. it asks until you understand what you're doing.",
       color: '#FF6B00',
       route: '/build',
     },
@@ -138,15 +138,16 @@ export default function Home() {
           50% { opacity: 0.5; transform: scale(0.8); }
         }
 
-        .tagline-word {
-          display: inline-block;
-          opacity: 0;
-          transform: translateY(20px);
-          transition: opacity 0.5s ease, transform 0.5s ease;
+        .dashboard-link {
+          font-size: 11px;
+          color: #444;
+          font-family: 'DM Mono', monospace;
+          letter-spacing: 0.05em;
+          text-decoration: none;
+          transition: color 0.15s ease;
         }
-        .tagline-word.visible {
-          opacity: 1;
-          transform: translateY(0);
+        .dashboard-link:hover {
+          color: #fff;
         }
       `}</style>
 
@@ -159,9 +160,10 @@ export default function Home() {
             <span className="nav-dot" />
             <span style={{ fontSize: '18px', fontWeight: 800, letterSpacing: '-0.5px' }}>assign</span>
           </div>
-          <span style={{ fontSize: '11px', color: '#444', fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em' }}>
-            BETA
-          </span>
+          <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
+            <a href="/dashboard" className="dashboard-link">dashboard →</a>
+            <span style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em' }}>BETA</span>
+          </div>
         </nav>
 
         <div style={{ marginBottom: '72px' }}>

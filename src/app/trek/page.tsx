@@ -29,11 +29,20 @@ export default function TrekPage() {
   const [newConcept, setNewConcept] = useState('')
   const [addingNew, setAddingNew] = useState(false)
   const [userMessageCount, setUserMessageCount] = useState(0)
+  const [roadmapId, setRoadmapId] = useState<string>('')
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  const saveProgressToStorage = (updatedConcepts: Concept[], id: string) => {
+    const existing = JSON.parse(localStorage.getItem('assign_roadmaps') || '[]')
+    const updated = existing.map((r: { id: string; concepts: Concept[]; lastStudied: string }) =>
+      r.id === id ? { ...r, concepts: updatedConcepts, lastStudied: new Date().toISOString() } : r
+    )
+    localStorage.setItem('assign_roadmaps', JSON.stringify(updated))
+  }
 
   const generateRoadmap = async (history: Message[]) => {
     setLoading(true)
@@ -55,7 +64,7 @@ export default function TrekPage() {
         setPhase('roadmap')
       }
     } catch {
-      // fallback
+      setMessages(prev => [...prev, { role: 'assistant', content: "something went wrong generating the roadmap, try again" }])
     } finally {
       setLoading(false)
     }
@@ -86,12 +95,14 @@ export default function TrekPage() {
 
       if (data.conceptMastered) {
         const next = currentConcept + 1
-        setConcepts(prev => prev.map((c, i) => {
-          if (i === currentConcept) return { ...c, status: 'done' }
-          if (i === next) return { ...c, status: 'current' }
+        const updatedConcepts = concepts.map((c, i) => {
+          if (i === currentConcept) return { ...c, status: 'done' as const }
+          if (i === next) return { ...c, status: 'current' as const }
           return c
-        }))
+        })
+        setConcepts(updatedConcepts)
         setCurrentConcept(next)
+        if (roadmapId) saveProgressToStorage(updatedConcepts, roadmapId)
       }
 
       if (data.reply) {
@@ -110,6 +121,22 @@ export default function TrekPage() {
     }))
     setConcepts(updated)
     setPhase('learning')
+
+    const topicMessage = messages.find(m => m.role === 'user')
+    const topic = topicMessage?.content || 'untitled'
+    const newId = Date.now().toString()
+    setRoadmapId(newId)
+
+    const newRoadmap = {
+      id: newId,
+      topic,
+      concepts: updated,
+      createdAt: new Date().toISOString(),
+      lastStudied: new Date().toISOString(),
+    }
+    const existing = JSON.parse(localStorage.getItem('assign_roadmaps') || '[]')
+    localStorage.setItem('assign_roadmaps', JSON.stringify([newRoadmap, ...existing]))
+
     const roadmapText = concepts.map((c, i) => `${i + 1}. ${c.title}`).join(', ')
     const startMessage: Message = {
       role: 'user',
@@ -165,6 +192,8 @@ export default function TrekPage() {
         .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
         @keyframes bounce { 0%, 80%, 100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
         .grain { position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: 0.025; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E"); }
+        .back-link { color: #333; font-size: 12px; text-decoration: none; font-family: 'DM Mono', monospace; transition: color 0.15s; }
+        .back-link:hover { color: #fff; }
       `}</style>
 
       <div className="grain" />
@@ -227,14 +256,19 @@ export default function TrekPage() {
             )}
 
             {phase === 'learning' && (
-              <div style={{ marginTop: '16px', padding: '12px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #1a1a1a' }}>
-                <div style={{ fontSize: '11px', color: '#444', fontFamily: "'DM Mono', monospace", marginBottom: '6px' }}>PROGRESS</div>
-                <div style={{ background: '#1a1a1a', borderRadius: '4px', height: '4px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', background: '#00FF87', width: `${(concepts.filter(c => c.status === 'done').length / concepts.length) * 100}%`, transition: 'width 0.5s ease', borderRadius: '4px' }} />
+              <div style={{ marginTop: '16px' }}>
+                <div style={{ padding: '12px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #1a1a1a', marginBottom: '12px' }}>
+                  <div style={{ fontSize: '11px', color: '#444', fontFamily: "'DM Mono', monospace", marginBottom: '6px' }}>PROGRESS</div>
+                  <div style={{ background: '#1a1a1a', borderRadius: '4px', height: '4px', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', background: '#00FF87', width: `${(concepts.filter(c => c.status === 'done').length / concepts.length) * 100}%`, transition: 'width 0.5s ease', borderRadius: '4px' }} />
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#444', marginTop: '6px' }}>
+                    {concepts.filter(c => c.status === 'done').length} of {concepts.length} concepts mastered
+                  </div>
                 </div>
-                <div style={{ fontSize: '11px', color: '#444', marginTop: '6px' }}>
-                  {concepts.filter(c => c.status === 'done').length} of {concepts.length} concepts mastered
-                </div>
+                <a href="/dashboard" className="back-link" style={{ display: 'block', textAlign: 'center', padding: '10px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #1a1a1a' }}>
+                  view dashboard →
+                </a>
               </div>
             )}
           </div>
@@ -246,7 +280,10 @@ export default function TrekPage() {
               <span style={{ fontSize: '20px', fontWeight: 800, letterSpacing: '-0.5px' }}>assign</span>
               <span style={{ fontSize: '11px', fontFamily: "'DM Mono', monospace", color: '#00FF87', background: '#00FF8715', padding: '3px 8px', borderRadius: '6px', letterSpacing: '0.05em' }}>🗺️ trek</span>
             </div>
-            <a href="/" style={{ color: '#333', fontSize: '12px', textDecoration: 'none', fontFamily: "'DM Mono', monospace" }}>← back</a>
+            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
+              <a href="/dashboard" className="back-link">dashboard</a>
+              <a href="/" className="back-link">← back</a>
+            </div>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '24px 0', display: 'flex', flexDirection: 'column', gap: '12px' }}>
@@ -268,7 +305,7 @@ export default function TrekPage() {
           <div style={{ padding: '16px 0 28px', display: 'flex', gap: '10px' }}>
             <input
               className="chat-input"
-              placeholder={phase === 'discovery' ? "tell assign what you want to learn..." : phase === 'roadmap' ? "suggest changes or type approve..." : "explain it back..."}
+              placeholder={phase === 'discovery' ? "tell assign what you want to learn..." : phase === 'roadmap' ? "suggest changes or hit approve..." : "explain it back..."}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => e.key === 'Enter' && send()}
