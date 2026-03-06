@@ -1,113 +1,67 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
-import { useRouter } from 'next/navigation'
 
-interface Message {
-  role: 'assistant' | 'user'
-  content: string
-}
-
-export default function Home() {
-  const [messages, setMessages] = useState<Message[]>([
-    { role: 'assistant', content: "Yo, learn something new today?" }
-  ])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [user, setUser] = useState<any>(null)
-  const bottomRef = useRef<HTMLDivElement>(null)
-  const router = useRouter()
-
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) router.push('/login')
-      else setUser(session.user)
+export default function LoginPage() {
+  const signInWithGoogle = async () => {
+    await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
     })
-  }, [router])
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages])
-
-  const signOut = async () => {
-    await supabase.auth.signOut()
-    router.push('/login')
   }
-
-  const send = async () => {
-    if (!input.trim()) return
-    const userMessage: Message = { role: 'user', content: input }
-    const updated = [...messages, userMessage]
-    setMessages(updated)
-    setInput('')
-    setLoading(true)
-
-    const res = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: updated })
-    })
-
-    const data = await res.json()
-    setMessages([...updated, { role: 'assistant', content: data.reply }])
-    setLoading(false)
-  }
-
-  if (!user) return null
 
   return (
-    <main className="min-h-screen bg-[#0a0a0a] text-white flex flex-col items-center justify-center px-4">
-      <div className="w-full max-w-xl flex flex-col h-screen py-8">
-        
-        <div className="mb-6 flex justify-between items-center">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-white">assign</h1>
-            <p className="text-xs text-zinc-500 mt-1">learn by explaining</p>
-          </div>
-          <button onClick={signOut} className="text-xs text-zinc-500 hover:text-white transition">
-            sign out
-          </button>
-        </div>
+    <main style={{
+      minHeight: '100vh',
+      background: '#080808',
+      color: '#fff',
+      fontFamily: "'Syne', sans-serif",
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+    }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+      `}</style>
 
-        <div className="flex-1 overflow-y-auto space-y-4 pr-1">
-          {messages.map((m, i) => (
-            <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[80%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
-                m.role === 'user'
-                  ? 'bg-white text-black rounded-br-sm'
-                  : 'bg-zinc-900 text-zinc-100 rounded-bl-sm'
-              }`}>
-                {m.content}
-              </div>
-            </div>
-          ))}
-          {loading && (
-            <div className="flex justify-start">
-              <div className="bg-zinc-900 text-zinc-400 px-4 py-3 rounded-2xl rounded-bl-sm text-sm">
-                thinking...
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
+      <div style={{ textAlign: 'center', maxWidth: '400px', padding: '40px 24px' }}>
+        <div style={{ fontSize: '32px', fontWeight: 800, letterSpacing: '-1px', marginBottom: '8px' }}>assign</div>
+        <div style={{ fontSize: '14px', color: '#444', marginBottom: '48px', fontFamily: "'DM Mono', monospace" }}>the answer is not the point.</div>
 
-        <div className="mt-4 flex gap-2 items-center">
-          <input
-            className="flex-1 bg-zinc-900 text-white text-sm rounded-xl px-4 py-3 outline-none placeholder-zinc-600 focus:ring-1 focus:ring-zinc-700"
-            placeholder="what are you stuck on?"
-            value={input}
-            onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && send()}
-          />
-          <button
-            onClick={send}
-            className="bg-white text-black text-sm font-medium px-4 py-3 rounded-xl hover:bg-zinc-200 transition"
-          >
-            send
-          </button>
-        </div>
+        <button
+          onClick={signInWithGoogle}
+          style={{
+            width: '100%',
+            background: '#fff',
+            color: '#000',
+            fontWeight: 700,
+            fontSize: '14px',
+            padding: '16px 24px',
+            borderRadius: '14px',
+            border: 'none',
+            cursor: 'pointer',
+            fontFamily: "'Syne', sans-serif",
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '10px',
+          }}
+        >
+          <svg width="18" height="18" viewBox="0 0 18 18">
+            <path fill="#4285F4" d="M16.51 8H8.98v3h4.3c-.18 1-.74 1.48-1.6 2.04v2.01h2.6a7.8 7.8 0 0 0 2.38-5.88c0-.57-.05-.66-.15-1.18z"/>
+            <path fill="#34A853" d="M8.98 17c2.16 0 3.97-.72 5.3-1.94l-2.6-2a4.8 4.8 0 0 1-7.18-2.54H1.83v2.07A8 8 0 0 0 8.98 17z"/>
+            <path fill="#FBBC05" d="M4.5 10.52a4.8 4.8 0 0 1 0-3.04V5.41H1.83a8 8 0 0 0 0 7.18l2.67-2.07z"/>
+            <path fill="#EA4335" d="M8.98 4.18c1.17 0 2.23.4 3.06 1.2l2.3-2.3A8 8 0 0 0 1.83 5.4L4.5 7.49a4.77 4.77 0 0 1 4.48-3.31z"/>
+          </svg>
+          continue with google
+        </button>
 
+        <p style={{ fontSize: '11px', color: '#333', marginTop: '24px', fontFamily: "'DM Mono', monospace" }}>
+          your progress saves automatically once you sign in
+        </p>
       </div>
     </main>
   )
