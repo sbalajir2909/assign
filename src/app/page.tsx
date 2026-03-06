@@ -9,10 +9,14 @@ export default function Home() {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session) router.push('/login')
-      else setTimeout(() => setVisible(true), 100)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT' || (!session && event !== 'INITIAL_SESSION')) {
+        router.push('/login')
+      } else if (session) {
+        setTimeout(() => setVisible(true), 100)
+      }
     })
+    return () => subscription.unsubscribe()
   }, [router])
 
   const modes = [
