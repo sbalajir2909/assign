@@ -9,13 +9,20 @@ export default function Home() {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_OUT' || (!session && event !== 'INITIAL_SESSION')) {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) {
         router.push('/login')
-      } else if (session) {
+      } else {
         setTimeout(() => setVisible(true), 100)
       }
     })
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        router.push('/login')
+      }
+    })
+
     return () => subscription.unsubscribe()
   }, [router])
 
