@@ -2,14 +2,18 @@
 
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabase'
 
 export default function Home() {
   const router = useRouter()
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    setTimeout(() => setVisible(true), 100)
-  }, [])
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!session) router.push('/login')
+      else setTimeout(() => setVisible(true), 100)
+    })
+  }, [router])
 
   const modes = [
     {
@@ -155,9 +159,20 @@ export default function Home() {
           text-decoration: none;
           transition: color 0.15s ease;
         }
-        .dashboard-link:hover {
-          color: #fff;
+        .dashboard-link:hover { color: #fff; }
+
+        .signout-btn {
+          font-size: 11px;
+          color: #333;
+          font-family: 'DM Mono', monospace;
+          letter-spacing: 0.05em;
+          background: none;
+          border: none;
+          cursor: pointer;
+          transition: color 0.15s ease;
+          padding: 0;
         }
+        .signout-btn:hover { color: #fff; }
       `}</style>
 
       <div className="grain" />
@@ -171,6 +186,15 @@ export default function Home() {
           </div>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
             <a href="/dashboard" className="dashboard-link">dashboard →</a>
+            <button
+              className="signout-btn"
+              onClick={async () => {
+                await supabase.auth.signOut()
+                router.push('/login')
+              }}
+            >
+              sign out
+            </button>
             <span style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace", letterSpacing: '0.05em' }}>BETA</span>
           </div>
         </nav>
@@ -211,7 +235,12 @@ export default function Home() {
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', gridTemplateAreas: '"a b" "c d" "e e"' }}>
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '12px',
+          gridTemplateAreas: '"a b" "c d" "e e"',
+        }}>
           {modes.map((mode, i) => (
             <button
               key={mode.key}
