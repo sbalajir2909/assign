@@ -8,10 +8,13 @@ export default function AuthCallback() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
+    // Handle both PKCE code and implicit token flows
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session) {
         router.push('/')
-      } else {
+      } else if (event === 'INITIAL_SESSION' && session) {
+        router.push('/')
+      } else if (event === 'INITIAL_SESSION' && !session) {
         router.push('/login')
       }
     })
