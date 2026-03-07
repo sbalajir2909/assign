@@ -26,28 +26,16 @@ export default function LoginPage() {
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
       `}</style>
-
       <div style={{ textAlign: 'center', maxWidth: '400px', padding: '40px 24px' }}>
         <div style={{ fontSize: '32px', fontWeight: 800, letterSpacing: '-1px', marginBottom: '8px' }}>assign</div>
         <div style={{ fontSize: '14px', color: '#444', marginBottom: '48px', fontFamily: "'DM Mono', monospace" }}>the answer is not the point.</div>
-
         <button
           onClick={signInWithGoogle}
           style={{
-            width: '100%',
-            background: '#fff',
-            color: '#000',
-            fontWeight: 700,
-            fontSize: '14px',
-            padding: '16px 24px',
-            borderRadius: '14px',
-            border: 'none',
-            cursor: 'pointer',
-            fontFamily: "'Syne', sans-serif",
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '10px',
+            width: '100%', background: '#fff', color: '#000', fontWeight: 700,
+            fontSize: '14px', padding: '16px 24px', borderRadius: '14px', border: 'none',
+            cursor: 'pointer', fontFamily: "'Syne', sans-serif",
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
           }}
         >
           <svg width="18" height="18" viewBox="0 0 18 18">
@@ -58,10 +46,6 @@ export default function LoginPage() {
           </svg>
           continue with google
         </button>
-
-        <p style={{ fontSize: '11px', color: '#333', marginTop: '24px', fontFamily: "'DM Mono', monospace" }}>
-          your progress saves automatically once you sign in
-        </p>
       </div>
     </main>
   )
