@@ -8,16 +8,30 @@ export default function AuthCallback() {
   const router = useRouter()
 
   useEffect(() => {
-    // Handle both PKCE code and implicit token flows
-    supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) {
+    const handleCallback = async () => {
+      const { data, error } = await supabase.auth.getSession()
+      
+      if (data.session) {
         router.push('/')
-      } else if (event === 'INITIAL_SESSION' && session) {
-        router.push('/')
-      } else if (event === 'INITIAL_SESSION' && !session) {
-        router.push('/login')
+        return
       }
-    })
+
+      // Try exchanging the code from URL
+      const params = new URLSearchParams(window.location.search)
+      const code = params.get('code')
+      
+      if (code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code)
+        if (!exchangeError) {
+          router.push('/')
+          return
+        }
+      }
+
+      router.push('/login')
+    }
+
+    handleCallback()
   }, [router])
 
   return (
