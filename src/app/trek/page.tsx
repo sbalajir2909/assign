@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect } from 'react'
+import { supabase } from '@/lib/supabase'
 
 interface Message {
   role: 'assistant' | 'user'
@@ -36,12 +37,11 @@ export default function TrekPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  const saveProgressToStorage = (updatedConcepts: Concept[], id: string) => {
-    const existing = JSON.parse(localStorage.getItem('assign_roadmaps') || '[]')
-    const updated = existing.map((r: { id: string; concepts: Concept[]; lastStudied: string }) =>
-      r.id === id ? { ...r, concepts: updatedConcepts, lastStudied: new Date().toISOString() } : r
-    )
-    localStorage.setItem('assign_roadmaps', JSON.stringify(updated))
+  const saveProgressToSupabase = async (updatedConcepts: Concept[], id: string) => {
+    await supabase
+      .from('roadmaps')
+      .update({ concepts: updatedConcepts, last_studied: new Date().toISOString() })
+      .eq('id', id)
   }
 
   const generateRoadmap = async (history: Message[]) => {
@@ -102,7 +102,7 @@ export default function TrekPage() {
         })
         setConcepts(updatedConcepts)
         setCurrentConcept(next)
-        if (roadmapId) saveProgressToStorage(updatedConcepts, roadmapId)
+        if (roadmapId) await saveProgressToSupabase(updatedConcepts, roadmapId)
       }
 
       if (data.reply) {
@@ -115,7 +115,7 @@ export default function TrekPage() {
     }
   }
 
-  const approveRoadmap = () => {
+  const approveRoadmap = async () => {
     const updated = concepts.map((c, i) => ({
       ...c, status: i === 0 ? 'current' as const : 'locked' as const
     }))
@@ -124,18 +124,20 @@ export default function TrekPage() {
 
     const topicMessage = messages.find(m => m.role === 'user')
     const topic = topicMessage?.content || 'untitled'
-    const newId = Date.now().toString()
-    setRoadmapId(newId)
 
-    const newRoadmap = {
-      id: newId,
-      topic,
-      concepts: updated,
-      createdAt: new Date().toISOString(),
-      lastStudied: new Date().toISOString(),
+    const { data: { session } } = await supabase.auth.getSession()
+    console.log('session user:', session?.user?.id)
+    if (session?.user) {
+      const { data, error } = await supabase
+        .from('roadmaps')
+        .insert({ user_id: session.user.id, topic, concepts: updated })
+        .select()
+        .single()
+      console.log('insert result:', data, error)
+      if (data) setRoadmapId(data.id)
+    } else {
+      console.log('no session found')
     }
-    const existing = JSON.parse(localStorage.getItem('assign_roadmaps') || '[]')
-    localStorage.setItem('assign_roadmaps', JSON.stringify([newRoadmap, ...existing]))
 
     const roadmapText = concepts.map((c, i) => `${i + 1}. ${c.title}`).join(', ')
     const startMessage: Message = {
@@ -199,7 +201,6 @@ export default function TrekPage() {
       <div className="grain" />
 
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', height: '100vh' }}>
-
         {(phase === 'roadmap' || phase === 'learning') && (
           <div style={{ width: '280px', flexShrink: 0, borderRight: '1px solid #111', display: 'flex', flexDirection: 'column', padding: '24px 20px', overflowY: 'auto' }}>
             <div style={{ marginBottom: '20px' }}>
