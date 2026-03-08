@@ -72,7 +72,8 @@ function TrekPageInner() {
 
     const { roadmap, materials: mats } = data
     const loadedConcepts = roadmap.concepts as Concept[]
-    const currentIdx = roadmap.current_concept_index || 0
+    const derivedIdx = (roadmap.concepts as Concept[]).findIndex(c => c.status === 'current')
+    const currentIdx = derivedIdx >= 0 ? derivedIdx : (roadmap.current_concept_index || 0)
     const history = (roadmap.conversation_history || []) as Message[]
     const profile = roadmap.learner_profile as LearnerProfile
 
