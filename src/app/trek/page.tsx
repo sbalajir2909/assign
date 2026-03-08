@@ -61,7 +61,12 @@ function TrekPageInner() {
   }, [])
 
   const loadRoadmap = async (id: string) => {
-    const res = await fetch(`/api/roadmap?id=${id}`)
+    const { data: { session } } = await supabase.auth.getSession()
+    const res = await fetch(`/api/roadmap?id=${id}`, {
+      headers: {
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      }
+    })
     const data = await res.json()
     if (!data.roadmap) return
 
@@ -84,7 +89,9 @@ function TrekPageInner() {
 
     const resumeMsg: Message = {
       role: 'assistant',
-      content: `welcome back! ${masteredTitles.length > 0 ? `you've mastered: ${masteredTitles}. ` : ''}picking up where you left off — ${loadedConcepts[currentIdx]?.title}.${history.length > 0 ? " i remember where we were." : " let's start fresh on this one."}`
+      content: `welcome back! ${masteredTitles.length > 0 ? `you've mastered: ${masteredTitles}. ` : ''}${history.length > 0
+        ? `picking up where we left off on ${loadedConcepts[currentIdx]?.title}.`
+        : `ready to continue with ${loadedConcepts[currentIdx]?.title}. what do you remember about it so far?`}`
     }
 
     const seedMessages = history.slice(-10)
@@ -95,9 +102,13 @@ function TrekPageInner() {
   const persistConversation = useCallback(async (
     id: string, msgs: Message[], conceptIdx: number, updatedConcepts: Concept[]
   ) => {
+    const { data: { session } } = await supabase.auth.getSession()
     await fetch('/api/roadmap', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      },
       body: JSON.stringify({
         roadmapId: id,
         conversationHistory: msgs.slice(-30),
@@ -259,9 +270,13 @@ function TrekPageInner() {
             generateConceptSummary(currentC.title, currentConcept, updatedMessages, roadmapId)
             await persistConversation(roadmapId, updatedMessages, next, updatedConcepts)
             if (next >= concepts.length) {
+              const { data: { session } } = await supabase.auth.getSession()
               await fetch('/api/roadmap', {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${session?.access_token || ''}`
+                },
                 body: JSON.stringify({ roadmapId, status: 'completed' })
               })
             }
@@ -304,7 +319,10 @@ function TrekPageInner() {
       const totalMinutes = concepts.reduce((a, c) => a + (c.estimatedMinutes || 0), 0)
       const res = await fetch('/api/roadmap', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session.access_token}`
+        },
         body: JSON.stringify({
           userId: session.user.id,
           topic: learnerProfile.topic,
@@ -324,11 +342,18 @@ function TrekPageInner() {
   const saveUserNotes = async () => {
     if (!selectedMaterial || !roadmapId) return
     setSavingNotes(true)
-    await supabase
-      .from('concept_materials')
-      .update({ user_notes: userNotes })
-      .eq('roadmap_id', roadmapId)
-      .eq('concept_index', selectedMaterial.concept_index)
+    const { data: { session } } = await supabase.auth.getSession()
+    await fetch('/api/roadmap', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || ''}`
+      },
+      body: JSON.stringify({
+        roadmapId,
+        userNotes: { conceptIndex: selectedMaterial.concept_index, notes: userNotes }
+      })
+    })
     setMaterials(prev => prev.map(m =>
       m.concept_index === selectedMaterial.concept_index ? { ...m, user_notes: userNotes } : m
     ))
@@ -440,7 +465,6 @@ ${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}
         {(phase === 'gist' || phase === 'learning') && (
           <div style={{ width: '300px', flexShrink: 0, borderRight: '1px solid #111', display: 'flex', flexDirection: 'column', padding: '24px 20px', overflowY: 'auto' }}>
 
-            {/* Gist card */}
             {gist && phase === 'gist' && (
               <div style={{ background: '#0e0e0e', border: '1px solid #1a1a1a', borderRadius: '14px', padding: '16px', marginBottom: '16px' }}>
                 <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#00FF87', letterSpacing: '0.08em', marginBottom: '10px' }}>COURSE OVERVIEW</div>
@@ -472,7 +496,6 @@ ${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}
               </div>
             )}
 
-            {/* Tabs */}
             {phase === 'learning' && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
                 <button className={`tab-btn ${sidebarTab === 'roadmap' ? 'active' : ''}`} onClick={() => setSidebarTab('roadmap')}>roadmap</button>
@@ -482,7 +505,6 @@ ${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}
               </div>
             )}
 
-            {/* Roadmap view */}
             {(phase === 'gist' || sidebarTab === 'roadmap') && (
               <>
                 <div style={{ marginBottom: '12px' }}>
@@ -579,7 +601,6 @@ ${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}
               </>
             )}
 
-            {/* Materials view */}
             {phase === 'learning' && sidebarTab === 'materials' && (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 {materials.length === 0 ? (
