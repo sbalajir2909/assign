@@ -1,8 +1,14 @@
 import Groq from 'groq-sdk'
 import { NextRequest, NextResponse } from 'next/server'
+import { createClient } from '@supabase/supabase-js'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 const SCRAPER_URL = process.env.SCRAPER_URL || 'https://assign-scraper-production.up.railway.app'
+
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+)
 
 const DISCOVERY_QUESTIONS = [
   "what topic do you want to understand end to end?",
@@ -12,20 +18,13 @@ const DISCOVERY_QUESTIONS = [
 ]
 
 const PLANNER_SYSTEM = `You are a teaching strategist. Given a learner profile and concept, decide the teaching strategy.
-
 Respond ONLY with valid JSON:
 {
   "strategy": "gap_fill | analogy_first | example_driven | definition_heavy",
   "openingPrompt": "The exact question to ask the learner to surface what they already know",
   "likelyGaps": ["gap 1", "gap 2"],
   "focusAreas": ["what to emphasize given their goal"]
-}
-
-strategy guide:
-- gap_fill: learner has some knowledge, find and fill the specific gaps
-- analogy_first: complete beginner, build intuition before formality
-- example_driven: goal is to build, learn through doing
-- definition_heavy: goal is exam/interview, precision matters`
+}`
 
 const TEACHER_SYSTEM = `You are Assign, a brutally effective Socratic tutor using the Feynman technique.
 
@@ -42,22 +41,43 @@ Rules:
 - Talk like a smart Gen Z friend, no corporate tone, no bullet points
 - Never say "great job" or "exactly right" — just move to the next gap`
 
+const SUMMARY_SYSTEM = `You are a curriculum writer. Generate a clean concept summary for a student who just mastered this concept through Socratic dialogue.
+
+Respond ONLY with valid JSON:
+{
+  "summary": "3 clean paragraphs explaining the concept thoroughly. First: what it is and core intuition. Second: how it works mechanically. Third: when and why to use it.",
+  "keyMentalModels": ["Mental model 1 in one sentence", "Mental model 2", "Mental model 3"],
+  "commonMistakes": ["Mistake 1 and why people make it", "Mistake 2", "Mistake 3"],
+  "sources": [{"label": "Official Docs", "url": "https://..."}, {"label": "Wikipedia", "url": "https://..."}]
+}`
+
 type Message = { role: 'user' | 'assistant' | 'system'; content: string }
 
 export async function POST(req: NextRequest) {
   const body = await req.json()
-  const { phase, messages, generateRoadmap, discoveryAnswers, conceptTitle, learnerProfile, questionIndex } = body
+  const {
+    phase,
+    messages,
+    generateRoadmap,
+    discoveryAnswers,
+    conceptTitle,
+    learnerProfile,
+    questionIndex,
+    roadmapId,
+    conceptIndex,
+    conversationContext
+  } = body
 
-  // ── Discovery ─────────────────────────────────────────────────────────────
+  // ── Discovery ──────────────────────────────────────────────────────────────
   if (phase === 'discovery') {
     const idx = questionIndex ?? 0
-    if (idx < DISCOVERY_QUESTIONS.length) {
-      return NextResponse.json({ reply: DISCOVERY_QUESTIONS[idx], nextQuestionIndex: idx + 1 })
-    }
-    return NextResponse.json({ reply: "okay i have everything i need. building your course now...", done: true })
+    return NextResponse.json({
+      reply: DISCOVERY_QUESTIONS[idx],
+      nextQuestionIndex: idx + 1
+    })
   }
 
-  // ── Generate course via scraper ───────────────────────────────────────────
+  // ── Generate course ────────────────────────────────────────────────────────
   if (generateRoadmap && discoveryAnswers) {
     try {
       const scraperRes = await fetch(`${SCRAPER_URL}/scrape`, {
@@ -66,10 +86,8 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify(discoveryAnswers),
         signal: AbortSignal.timeout(30000)
       })
-
-      if (!scraperRes.ok) throw new Error(`scraper returned ${scraperRes.status}`)
+      if (!scraperRes.ok) throw new Error(`scraper ${scraperRes.status}`)
       const scraperData = await scraperRes.json()
-
       if (scraperData.course) {
         return NextResponse.json({
           course: scraperData.course,
@@ -77,21 +95,21 @@ export async function POST(req: NextRequest) {
         })
       }
     } catch (e) {
-      console.error('[trek] scraper failed, falling back to LLM:', e)
+      console.error('[trek] scraper failed, falling back:', e)
     }
 
-    // fallback: LLM-only course generation
+    // LLM fallback
     const { topic, level, goal, time } = discoveryAnswers
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
       messages: [
         {
           role: 'system',
-          content: `Generate a course plan as JSON: { gist: { emphasis, outcomes, prereqs }, concepts: [{ title, description, why, subtopics, estimatedMinutes, prereq, sources }] }. 5-7 concepts. Respond with JSON only.`
+          content: `Generate a course as JSON: { gist: { emphasis, outcomes, prereqs }, concepts: [{ title, description, why, subtopics, estimatedMinutes, prereq, sources }] }. 5-7 concepts. Specific titles only — never "Introduction" or "Basics". Respond with JSON only.`
         },
         { role: 'user', content: `Topic: ${topic}, Level: ${level}, Goal: ${goal}, Time: ${time}` }
       ],
-      max_tokens: 1500,
+      max_tokens: 2000,
       temperature: 0.3
     })
     const raw = completion.choices[0].message.content || ''
@@ -103,7 +121,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  // ── Plan teaching strategy ────────────────────────────────────────────────
+  // ── Plan teaching strategy ─────────────────────────────────────────────────
   if (phase === 'plan' && conceptTitle && learnerProfile) {
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
@@ -111,7 +129,7 @@ export async function POST(req: NextRequest) {
         { role: 'system', content: PLANNER_SYSTEM },
         { role: 'user', content: `Concept: ${conceptTitle}\nLearner: ${JSON.stringify(learnerProfile)}` }
       ],
-      max_tokens: 300,
+      max_tokens: 400,
       temperature: 0.3
     })
     const raw = completion.choices[0].message.content || ''
@@ -119,19 +137,28 @@ export async function POST(req: NextRequest) {
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
       if (jsonMatch) return NextResponse.json({ plan: JSON.parse(jsonMatch[0]) })
     } catch {
-      return NextResponse.json({ plan: { strategy: 'gap_fill', openingPrompt: `tell me what you already know about ${conceptTitle}`, likelyGaps: [], focusAreas: [] } })
+      return NextResponse.json({
+        plan: {
+          strategy: 'gap_fill',
+          openingPrompt: `okay let's start. tell me what you already know about ${conceptTitle}`,
+          likelyGaps: [],
+          focusAreas: []
+        }
+      })
     }
   }
 
-  // ── Teach ─────────────────────────────────────────────────────────────────
+  // ── Teaching loop ──────────────────────────────────────────────────────────
   if (phase === 'learning' && messages) {
-    const systemWithContext = learnerProfile
-      ? `${TEACHER_SYSTEM}\n\nLearner profile: ${JSON.stringify(learnerProfile)}\nCurrent concept: ${conceptTitle}`
-      : TEACHER_SYSTEM
+    const systemContent = `${TEACHER_SYSTEM}
+
+Learner profile: ${JSON.stringify(learnerProfile)}
+Current concept: ${conceptTitle}
+${conversationContext ? `Context from previous session: ${conversationContext}` : ''}`
 
     const completion = await groq.chat.completions.create({
       model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'system', content: systemWithContext }, ...messages],
+      messages: [{ role: 'system', content: systemContent }, ...messages],
       max_tokens: 400,
       temperature: 0.7
     })
@@ -140,6 +167,71 @@ export async function POST(req: NextRequest) {
     const conceptMastered = raw.includes('[CONCEPT_MASTERED]')
     const reply = raw.replace('[CONCEPT_MASTERED]', '').trim()
     return NextResponse.json({ reply, conceptMastered })
+  }
+
+  // ── Generate concept summary after mastery ────────────────────────────────
+  if (phase === 'generateSummary' && conceptTitle && messages) {
+    const conversationText = messages
+      .map((m: Message) => `${m.role}: ${m.content}`)
+      .join('\n')
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [
+        { role: 'system', content: SUMMARY_SYSTEM },
+        {
+          role: 'user',
+          content: `Concept: ${conceptTitle}\nLearner goal: ${learnerProfile?.goal || 'understand deeply'}\n\nConversation where they learned this:\n${conversationText.slice(0, 3000)}`
+        }
+      ],
+      max_tokens: 1000,
+      temperature: 0.3
+    })
+
+    const raw = completion.choices[0].message.content || ''
+    try {
+      const jsonMatch = raw.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const summaryData = JSON.parse(jsonMatch[0])
+
+        // Save to DB if we have roadmapId
+        if (roadmapId && conceptIndex !== undefined) {
+          // Get user_id from roadmap
+          const { data: roadmap } = await supabase
+            .from('roadmaps')
+            .select('user_id')
+            .eq('id', roadmapId)
+            .single()
+
+          if (roadmap) {
+            await supabase.from('concept_materials').upsert({
+              roadmap_id: roadmapId,
+              user_id: roadmap.user_id,
+              concept_index: conceptIndex,
+              concept_title: conceptTitle,
+              summary: summaryData.summary,
+              key_mental_models: summaryData.keyMentalModels,
+              common_mistakes: summaryData.commonMistakes,
+              sources: summaryData.sources || []
+            }, { onConflict: 'roadmap_id,concept_index' })
+
+            // Update user profile — add to mastered concepts
+            await supabase.from('user_profiles').upsert({
+              user_id: roadmap.user_id,
+              mastered_concepts: supabase.rpc('array_append_unique', {
+                arr_column: 'mastered_concepts',
+                new_val: conceptTitle
+              })
+            })
+          }
+        }
+
+        return NextResponse.json({ summary: summaryData })
+      }
+    } catch (e) {
+      console.error('[summary] parse failed:', e)
+    }
+    return NextResponse.json({ error: 'summary generation failed' }, { status: 500 })
   }
 
   return NextResponse.json({ error: 'invalid request' }, { status: 400 })
