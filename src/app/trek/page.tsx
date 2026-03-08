@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
 interface Message { role: 'assistant' | 'user'; content: string }
@@ -20,7 +21,8 @@ interface ConceptMaterial {
 type Phase = 'discovery' | 'gist' | 'learning'
 type SidebarTab = 'roadmap' | 'materials'
 
-export default function TrekPage() {
+function TrekPageInner() {
+  const searchParams = useSearchParams()
   const [phase, setPhase] = useState<Phase>('discovery')
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
@@ -48,23 +50,15 @@ export default function TrekPage() {
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
 
-  // Check for resume on mount
   useEffect(() => {
-    checkResume()
-  }, [])
-
-  const checkResume = async () => {
-    const searchParams = new URLSearchParams(window.location.search)
     const resumeId = searchParams.get('resume')
-
     if (resumeId) {
       setResuming(true)
-      await loadRoadmap(resumeId)
-      setResuming(false)
+      loadRoadmap(resumeId).finally(() => setResuming(false))
     } else {
       askNextQuestion(0)
     }
-  }
+  }, [])
 
   const loadRoadmap = async (id: string) => {
     const res = await fetch(`/api/roadmap?id=${id}`)
@@ -83,7 +77,6 @@ export default function TrekPage() {
     setRoadmapId(id)
     setMaterials(mats || [])
 
-    // Build resume context summary
     const masteredTitles = loadedConcepts
       .filter(c => c.status === 'done')
       .map(c => c.title)
@@ -91,29 +84,23 @@ export default function TrekPage() {
 
     const resumeMsg: Message = {
       role: 'assistant',
-      content: `welcome back! ${masteredTitles.length > 0 ? `you've mastered: ${masteredTitles}. ` : ''}picking up where you left off — ${loadedConcepts[currentIdx]?.title}. ${history.length > 0 ? "i remember where we were." : "let's start fresh on this one."}`
+      content: `welcome back! ${masteredTitles.length > 0 ? `you've mastered: ${masteredTitles}. ` : ''}picking up where you left off — ${loadedConcepts[currentIdx]?.title}.${history.length > 0 ? " i remember where we were." : " let's start fresh on this one."}`
     }
 
-    // Seed with last 10 messages for context
     const seedMessages = history.slice(-10)
     setMessages([resumeMsg, ...seedMessages])
     setPhase('learning')
   }
 
   const persistConversation = useCallback(async (
-    id: string,
-    msgs: Message[],
-    conceptIdx: number,
-    updatedConcepts: Concept[]
+    id: string, msgs: Message[], conceptIdx: number, updatedConcepts: Concept[]
   ) => {
-    // Only keep last 30 messages to avoid bloat
-    const trimmed = msgs.slice(-30)
     await fetch('/api/roadmap', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         roadmapId: id,
-        conversationHistory: trimmed,
+        conversationHistory: msgs.slice(-30),
         currentConceptIndex: conceptIdx,
         concepts: updatedConcepts
       })
@@ -177,10 +164,7 @@ export default function TrekPage() {
   }
 
   const generateConceptSummary = async (
-    conceptTitle: string,
-    conceptIdx: number,
-    msgs: Message[],
-    rmId: string
+    conceptTitle: string, conceptIdx: number, msgs: Message[], rmId: string
   ) => {
     try {
       const res = await fetch('/api/trek', {
@@ -222,7 +206,6 @@ export default function TrekPage() {
     setMessages(updatedMessages)
     setInput('')
 
-    // Discovery
     if (phase === 'discovery') {
       const key = answerKeys[questionIndex]
       const updatedAnswers = { ...discoveryAnswers, [key]: input }
@@ -240,12 +223,9 @@ export default function TrekPage() {
       return
     }
 
-    // Learning
     if (phase === 'learning') {
       setLoading(true)
       const currentC = concepts[currentConcept]
-
-      // Build context from previous session if resuming
       const masteredSummaries = materials
         .filter(m => m.concept_index < currentConcept)
         .map(m => `${m.concept_title}: ${m.summary.slice(0, 100)}`)
@@ -257,7 +237,7 @@ export default function TrekPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             phase: 'learning',
-            messages: updatedMessages.slice(-20), // last 20 only
+            messages: updatedMessages.slice(-20),
             conceptTitle: currentC.title,
             learnerProfile,
             conversationContext: masteredSummaries || undefined
@@ -275,13 +255,8 @@ export default function TrekPage() {
           setConcepts(updatedConcepts)
           setCurrentConcept(next)
 
-          // Generate summary in background
           if (roadmapId) {
             generateConceptSummary(currentC.title, currentConcept, updatedMessages, roadmapId)
-          }
-
-          // Persist to DB
-          if (roadmapId) {
             await persistConversation(roadmapId, updatedMessages, next, updatedConcepts)
             if (next >= concepts.length) {
               await fetch('/api/roadmap', {
@@ -292,7 +267,6 @@ export default function TrekPage() {
             }
           }
 
-          // Plan next concept
           if (next < concepts.length && learnerProfile) {
             planConceptTeaching(updatedConcepts[next], learnerProfile)
           }
@@ -303,7 +277,6 @@ export default function TrekPage() {
         if (data.reply) {
           const newMessages = [...updatedMessages, { role: 'assistant' as const, content: data.reply }]
           setMessages(newMessages)
-          // Persist conversation every message
           if (roadmapId) {
             persistConversation(roadmapId, newMessages, currentConcept, concepts)
           }
@@ -326,7 +299,6 @@ export default function TrekPage() {
     const plan = learnerProfile ? await planConceptTeaching(updated[0], learnerProfile) : null
     const openingPrompt = plan?.openingPrompt || `okay let's start. tell me what you already know about ${updated[0].title}`
 
-    // Save roadmap to DB
     const { data: { session } } = await supabase.auth.getSession()
     if (session?.user && learnerProfile) {
       const totalMinutes = concepts.reduce((a, c) => a + (c.estimatedMinutes || 0), 0)
@@ -363,10 +335,9 @@ export default function TrekPage() {
     setSavingNotes(false)
   }
 
-  const exportNotesPDF = async () => {
+  const exportNotes = () => {
     if (materials.length === 0) return
-    const content = materials.map(m => `
-# ${m.concept_title}
+    const content = materials.map(m => `# ${m.concept_title}
 
 ${m.summary}
 
@@ -375,10 +346,9 @@ ${m.key_mental_models.map(mm => `- ${mm}`).join('\n')}
 
 ## Common Mistakes
 ${m.common_mistakes.map(mm => `- ${mm}`).join('\n')}
+${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}
 
-${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
-
----`).join('\n')
+---`).join('\n\n')
 
     const blob = new Blob([`# ${learnerProfile?.topic || 'Course'} Notes\n\n${content}`], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
@@ -397,7 +367,10 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
   }
   const addConcept = () => {
     if (!newConcept.trim()) return
-    setConcepts(prev => [...prev, { id: Date.now(), title: newConcept.trim(), why: '', subtopics: [], estimatedMinutes: 15, prereq: null, status: 'locked' }])
+    setConcepts(prev => [...prev, {
+      id: Date.now(), title: newConcept.trim(), why: '', subtopics: [],
+      estimatedMinutes: 15, prereq: null, status: 'locked'
+    }])
     setNewConcept('')
     setAddingNew(false)
   }
@@ -411,9 +384,7 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
   if (resuming) {
     return (
       <main style={{ minHeight: '100vh', background: '#080808', color: '#fff', fontFamily: "'Syne', sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '14px', color: '#444', fontFamily: "'DM Mono', monospace" }}>loading your course...</div>
-        </div>
+        <div style={{ fontSize: '14px', color: '#444', fontFamily: "'DM Mono', monospace" }}>loading your course...</div>
       </main>
     )
   }
@@ -423,24 +394,29 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: #080808; } ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
-        .chat-input { background: #111; border: 1px solid #222; border-radius: 14px; color: #fff; font-size: 14px; padding: 14px 18px; outline: none; width: 100%; font-family: 'Syne', sans-serif; transition: border-color 0.2s; resize: none; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: #080808; }
+        ::-webkit-scrollbar-thumb { background: #222; border-radius: 2px; }
+        .chat-input { background: #111; border: 1px solid #222; border-radius: 14px; color: #fff; font-size: 14px; padding: 14px 18px; outline: none; width: 100%; font-family: 'Syne', sans-serif; transition: border-color 0.2s; }
         .chat-input:focus { border-color: #00FF87; }
         .chat-input::placeholder { color: #333; }
         .send-btn { background: #00FF87; color: #000; font-weight: 700; font-size: 13px; padding: 14px 22px; border-radius: 14px; border: none; cursor: pointer; font-family: 'Syne', sans-serif; transition: opacity 0.15s; white-space: nowrap; }
-        .send-btn:hover { opacity: 0.85; } .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+        .send-btn:hover { opacity: 0.85; }
+        .send-btn:disabled { opacity: 0.3; cursor: not-allowed; }
         .msg-bubble { max-width: 80%; padding: 14px 18px; border-radius: 18px; font-size: 14px; line-height: 1.6; white-space: pre-wrap; }
         .msg-user { background: #00FF87; color: #000; font-weight: 500; border-bottom-right-radius: 4px; margin-left: auto; }
         .msg-assign { background: #111; color: #ccc; border: 1px solid #1a1a1a; border-bottom-left-radius: 4px; }
-        .concept-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #111; border: 1px solid #1a1a1a; margin-bottom: 8px; transition: all 0.2s; cursor: default; }
+        .concept-item { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: 10px; background: #111; border: 1px solid #1a1a1a; margin-bottom: 8px; transition: all 0.2s; }
         .concept-item.current { border-color: #00FF87; background: #00FF870a; }
-        .concept-item.done { opacity: 0.5; cursor: pointer; } .concept-item.done:hover { opacity: 0.8; }
+        .concept-item.done { opacity: 0.5; cursor: pointer; }
+        .concept-item.done:hover { opacity: 0.8; }
         .concept-num { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; flex-shrink: 0; font-family: 'DM Mono', monospace; margin-top: 1px; }
         .edit-input { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; color: #fff; font-size: 13px; padding: 6px 10px; outline: none; flex: 1; font-family: 'Syne', sans-serif; }
         .approve-btn { width: 100%; background: #00FF87; color: #000; font-weight: 800; font-size: 15px; padding: 16px; border-radius: 14px; border: none; cursor: pointer; font-family: 'Syne', sans-serif; letter-spacing: -0.3px; transition: opacity 0.15s; margin-top: 16px; }
         .approve-btn:hover { opacity: 0.85; }
         .thinking-dot { width: 6px; height: 6px; border-radius: 50%; background: #444; animation: bounce 1.2s infinite; display: inline-block; }
-        .thinking-dot:nth-child(2) { animation-delay: 0.2s; } .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+        .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
+        .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
         @keyframes bounce { 0%,80%,100% { transform: translateY(0); } 40% { transform: translateY(-6px); } }
         .grain { position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: 0.025; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E"); }
         .back-link { color: #333; font-size: 12px; text-decoration: none; font-family: 'DM Mono', monospace; transition: color 0.15s; }
@@ -451,20 +427,16 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
         .tab-btn:not(.active):hover { color: #888; }
         .material-card { background: #0e0e0e; border: 1px solid #1a1a1a; border-radius: 12px; padding: 14px; margin-bottom: 10px; cursor: pointer; transition: border-color 0.2s; }
         .material-card:hover { border-color: #333; }
-        .material-card.selected { border-color: #00FF87; }
         .notes-textarea { width: 100%; background: #111; border: 1px solid #222; border-radius: 8px; color: #ccc; font-size: 12px; padding: 10px; outline: none; font-family: 'DM Mono', monospace; resize: vertical; min-height: 80px; line-height: 1.5; }
         .notes-textarea:focus { border-color: #00FF87; }
-        .source-tag { font-size: 10px; font-family: 'DM Mono', monospace; padding: 2px 8px; border-radius: 4px; text-decoration: none; display: inline-block; margin: 2px; }
         .subtopic-tag { font-size: 10px; font-family: 'DM Mono', monospace; color: #444; background: #1a1a1a; padding: 2px 7px; border-radius: 4px; margin: 2px; display: inline-block; }
-        .progress-bar { background: #1a1a1a; border-radius: 4px; height: 4px; overflow: hidden; }
-        .progress-fill { height: 100%; background: #00FF87; transition: width 0.5s ease; border-radius: 4px; }
       `}</style>
 
       <div className="grain" />
 
       <div style={{ position: 'relative', zIndex: 1, display: 'flex', height: '100vh' }}>
 
-        {/* ── Sidebar ───────────────────────────────────────────────────────── */}
+        {/* ── Sidebar ── */}
         {(phase === 'gist' || phase === 'learning') && (
           <div style={{ width: '300px', flexShrink: 0, borderRight: '1px solid #111', display: 'flex', flexDirection: 'column', padding: '24px 20px', overflowY: 'auto' }}>
 
@@ -477,13 +449,17 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
                   <div style={{ marginBottom: '14px' }}>
                     <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FF2D78', marginBottom: '6px' }}>BEFORE YOU START</div>
                     {gist.prereqs.map((p, i) => (
-                      <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}><span style={{ color: '#FF2D78' }}>!</span>{p}</div>
+                      <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
+                        <span style={{ color: '#FF2D78', flexShrink: 0 }}>!</span>{p}
+                      </div>
                     ))}
                   </div>
                 )}
                 <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FFE500', marginBottom: '8px' }}>YOU'LL BE ABLE TO</div>
                 {gist.outcomes?.map((o, i) => (
-                  <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}><span style={{ color: '#00FF87' }}>→</span>{o}</div>
+                  <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
+                    <span style={{ color: '#00FF87', flexShrink: 0 }}>→</span>{o}
+                  </div>
                 ))}
                 <div style={{ marginTop: '14px', padding: '8px 12px', background: '#111', borderRadius: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <span style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace" }}>{concepts.length} concepts · ~{totalMinutes}min</span>
@@ -496,17 +472,17 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
               </div>
             )}
 
-            {/* Tabs — only during learning */}
+            {/* Tabs */}
             {phase === 'learning' && (
               <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
                 <button className={`tab-btn ${sidebarTab === 'roadmap' ? 'active' : ''}`} onClick={() => setSidebarTab('roadmap')}>roadmap</button>
                 <button className={`tab-btn ${sidebarTab === 'materials' ? 'active' : ''}`} onClick={() => setSidebarTab('materials')}>
-                  materials {materials.length > 0 ? `(${materials.length})` : ''}
+                  materials{materials.length > 0 ? ` (${materials.length})` : ''}
                 </button>
               </div>
             )}
 
-            {/* Roadmap label */}
+            {/* Roadmap view */}
             {(phase === 'gist' || sidebarTab === 'roadmap') && (
               <>
                 <div style={{ marginBottom: '12px' }}>
@@ -583,111 +559,107 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
                 {phase === 'gist' && (
                   <button className="approve-btn" onClick={approveRoadmap}>start learning →</button>
                 )}
+
+                {phase === 'learning' && sidebarTab === 'roadmap' && (
+                  <div style={{ marginTop: '16px' }}>
+                    <div style={{ padding: '12px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #111', marginBottom: '12px' }}>
+                      <div style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace", marginBottom: '8px' }}>PROGRESS</div>
+                      <div style={{ background: '#1a1a1a', borderRadius: '4px', height: '4px', overflow: 'hidden' }}>
+                        <div style={{ height: '100%', background: '#00FF87', width: `${(concepts.filter(c => c.status === 'done').length / concepts.length) * 100}%`, transition: 'width 0.5s ease', borderRadius: '4px' }} />
+                      </div>
+                      <div style={{ fontSize: '11px', color: '#333', marginTop: '8px' }}>
+                        {concepts.filter(c => c.status === 'done').length} of {concepts.length} mastered
+                      </div>
+                    </div>
+                    <a href="/dashboard" className="back-link" style={{ display: 'block', textAlign: 'center', padding: '10px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #111' }}>
+                      view dashboard →
+                    </a>
+                  </div>
+                )}
               </>
             )}
 
-            {/* Materials tab */}
+            {/* Materials view */}
             {phase === 'learning' && sidebarTab === 'materials' && (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 {materials.length === 0 ? (
                   <div style={{ textAlign: 'center', padding: '40px 0' }}>
                     <div style={{ fontSize: '12px', color: '#333', fontFamily: "'DM Mono', monospace" }}>materials appear after you master each concept</div>
                   </div>
-                ) : (
+                ) : !selectedMaterial ? (
                   <>
-                    {!selectedMaterial ? (
-                      <>
-                        {materials.map((m, i) => (
-                          <div key={i} className="material-card" onClick={() => { setSelectedMaterial(m); setUserNotes(m.user_notes || '') }}>
-                            <div style={{ fontSize: '11px', color: '#00FF87', fontFamily: "'DM Mono', monospace", marginBottom: '4px' }}>concept {m.concept_index + 1}</div>
-                            <div style={{ fontSize: '13px', color: '#ccc', fontWeight: 600 }}>{m.concept_title}</div>
-                            <div style={{ fontSize: '11px', color: '#444', marginTop: '4px', lineHeight: 1.5 }}>{m.summary.slice(0, 80)}...</div>
+                    {materials
+                      .sort((a, b) => a.concept_index - b.concept_index)
+                      .map((m, i) => (
+                        <div key={i} className="material-card" onClick={() => { setSelectedMaterial(m); setUserNotes(m.user_notes || '') }}>
+                          <div style={{ fontSize: '11px', color: '#00FF87', fontFamily: "'DM Mono', monospace", marginBottom: '4px' }}>concept {m.concept_index + 1}</div>
+                          <div style={{ fontSize: '13px', color: '#ccc', fontWeight: 600, marginBottom: '4px' }}>{m.concept_title}</div>
+                          <div style={{ fontSize: '11px', color: '#444', lineHeight: 1.5 }}>{m.summary.slice(0, 80)}...</div>
+                        </div>
+                      ))}
+                    <button onClick={exportNotes} style={{ width: '100%', marginTop: '8px', background: 'none', border: '1px solid #222', borderRadius: '10px', color: '#444', padding: '10px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Mono', monospace" }}>
+                      ↓ export all notes
+                    </button>
+                  </>
+                ) : (
+                  <div style={{ flex: 1 }}>
+                    <button onClick={() => setSelectedMaterial(null)} style={{ background: 'none', border: 'none', color: '#444', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Mono', monospace", marginBottom: '12px', padding: 0 }}>← back</button>
+                    <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginBottom: '12px' }}>{selectedMaterial.concept_title}</div>
+                    <div style={{ fontSize: '12px', color: '#666', lineHeight: 1.7, marginBottom: '16px' }}>{selectedMaterial.summary}</div>
+
+                    {selectedMaterial.key_mental_models.length > 0 && (
+                      <div style={{ marginBottom: '14px' }}>
+                        <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FFE500', marginBottom: '8px' }}>MENTAL MODELS</div>
+                        {selectedMaterial.key_mental_models.map((mm, i) => (
+                          <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
+                            <span style={{ color: '#FFE500', flexShrink: 0 }}>→</span>{mm}
                           </div>
                         ))}
-                        <button onClick={exportNotesPDF} style={{ width: '100%', marginTop: '8px', background: 'none', border: '1px solid #222', borderRadius: '10px', color: '#444', padding: '10px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Mono', monospace" }}>
-                          ↓ export all notes
-                        </button>
-                      </>
-                    ) : (
-                      <div style={{ flex: 1 }}>
-                        <button onClick={() => setSelectedMaterial(null)} style={{ background: 'none', border: 'none', color: '#444', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Mono', monospace", marginBottom: '12px', padding: 0 }}>← back</button>
-                        <div style={{ fontSize: '14px', fontWeight: 700, color: '#fff', marginBottom: '12px' }}>{selectedMaterial.concept_title}</div>
-
-                        <div style={{ fontSize: '12px', color: '#666', lineHeight: 1.7, marginBottom: '16px' }}>{selectedMaterial.summary}</div>
-
-                        {selectedMaterial.key_mental_models.length > 0 && (
-                          <div style={{ marginBottom: '14px' }}>
-                            <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FFE500', marginBottom: '8px' }}>MENTAL MODELS</div>
-                            {selectedMaterial.key_mental_models.map((mm, i) => (
-                              <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
-                                <span style={{ color: '#FFE500', flexShrink: 0 }}>→</span>{mm}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {selectedMaterial.common_mistakes.length > 0 && (
-                          <div style={{ marginBottom: '14px' }}>
-                            <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FF2D78', marginBottom: '8px' }}>COMMON MISTAKES</div>
-                            {selectedMaterial.common_mistakes.map((mm, i) => (
-                              <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
-                                <span style={{ color: '#FF2D78', flexShrink: 0 }}>!</span>{mm}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-
-                        {selectedMaterial.sources.length > 0 && (
-                          <div style={{ marginBottom: '14px' }}>
-                            <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#A855F7', marginBottom: '8px' }}>SOURCES</div>
-                            {selectedMaterial.sources.map((s, i) => (
-                              <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="source-tag" style={{ background: '#1a1a1a', color: '#888', border: '1px solid #222' }}>
-                                {s.label} ↗
-                              </a>
-                            ))}
-                          </div>
-                        )}
-
-                        <div style={{ marginBottom: '8px' }}>
-                          <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#444', marginBottom: '6px' }}>YOUR NOTES</div>
-                          <textarea
-                            className="notes-textarea"
-                            value={userNotes}
-                            onChange={e => setUserNotes(e.target.value)}
-                            placeholder="add your own notes..."
-                          />
-                          <button onClick={saveUserNotes} disabled={savingNotes} style={{ marginTop: '6px', background: 'none', border: '1px solid #222', borderRadius: '8px', color: '#444', padding: '6px 12px', cursor: 'pointer', fontSize: '11px', fontFamily: "'DM Mono', monospace" }}>
-                            {savingNotes ? 'saving...' : 'save notes'}
-                          </button>
-                        </div>
                       </div>
                     )}
-                  </>
-                )}
-              </div>
-            )}
 
-            {/* Progress during learning */}
-            {phase === 'learning' && sidebarTab === 'roadmap' && (
-              <div style={{ marginTop: '16px' }}>
-                <div style={{ padding: '12px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #111', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace", marginBottom: '8px' }}>PROGRESS</div>
-                  <div className="progress-bar">
-                    <div className="progress-fill" style={{ width: `${(concepts.filter(c => c.status === 'done').length / concepts.length) * 100}%` }} />
+                    {selectedMaterial.common_mistakes.length > 0 && (
+                      <div style={{ marginBottom: '14px' }}>
+                        <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#FF2D78', marginBottom: '8px' }}>COMMON MISTAKES</div>
+                        {selectedMaterial.common_mistakes.map((mm, i) => (
+                          <div key={i} style={{ fontSize: '12px', color: '#666', padding: '4px 0', display: 'flex', gap: '8px' }}>
+                            <span style={{ color: '#FF2D78', flexShrink: 0 }}>!</span>{mm}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {selectedMaterial.sources.length > 0 && (
+                      <div style={{ marginBottom: '14px' }}>
+                        <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#A855F7', marginBottom: '8px' }}>SOURCES</div>
+                        {selectedMaterial.sources.map((s, i) => (
+                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" style={{ fontSize: '11px', fontFamily: "'DM Mono', monospace", background: '#1a1a1a', color: '#888', border: '1px solid #222', padding: '3px 8px', borderRadius: '4px', textDecoration: 'none', display: 'inline-block', margin: '2px' }}>
+                            {s.label} ↗
+                          </a>
+                        ))}
+                      </div>
+                    )}
+
+                    <div>
+                      <div style={{ fontSize: '10px', fontFamily: "'DM Mono', monospace", color: '#444', marginBottom: '6px' }}>YOUR NOTES</div>
+                      <textarea
+                        className="notes-textarea"
+                        value={userNotes}
+                        onChange={e => setUserNotes(e.target.value)}
+                        placeholder="add your own notes..."
+                      />
+                      <button onClick={saveUserNotes} disabled={savingNotes} style={{ marginTop: '6px', background: 'none', border: '1px solid #222', borderRadius: '8px', color: '#444', padding: '6px 12px', cursor: 'pointer', fontSize: '11px', fontFamily: "'DM Mono', monospace" }}>
+                        {savingNotes ? 'saving...' : 'save notes'}
+                      </button>
+                    </div>
                   </div>
-                  <div style={{ fontSize: '11px', color: '#333', marginTop: '8px' }}>
-                    {concepts.filter(c => c.status === 'done').length} of {concepts.length} mastered
-                  </div>
-                </div>
-                <a href="/dashboard" className="back-link" style={{ display: 'block', textAlign: 'center', padding: '10px', background: '#0e0e0e', borderRadius: '10px', border: '1px solid #111' }}>
-                  view dashboard →
-                </a>
+                )}
               </div>
             )}
           </div>
         )}
 
-        {/* ── Main chat ─────────────────────────────────────────────────────── */}
+        {/* ── Main chat ── */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', maxWidth: phase === 'discovery' ? '680px' : 'none', margin: phase === 'discovery' ? '0 auto' : '0', width: '100%', padding: '0 24px' }}>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '24px 0 20px', borderBottom: '1px solid #111' }}>
@@ -747,5 +719,17 @@ ${m.user_notes ? `## My Notes\n${m.user_notes}` : ''}
         </div>
       </div>
     </main>
+  )
+}
+
+export default function TrekPage() {
+  return (
+    <Suspense fallback={
+      <main style={{ minHeight: '100vh', background: '#080808', color: '#fff', fontFamily: "'Syne', sans-serif", display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <div style={{ fontSize: '14px', color: '#444', fontFamily: "'DM Mono', monospace" }}>loading...</div>
+      </main>
+    }>
+      <TrekPageInner />
+    </Suspense>
   )
 }
