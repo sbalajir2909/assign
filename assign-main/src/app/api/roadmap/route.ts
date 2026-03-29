@@ -1,4 +1,4 @@
-export const runtime = 'edge'
+
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       .from('roadmaps')
       .select('id, topic, status, current_concept_index, concepts, created_at, last_studied, total_minutes_estimated, sources_hit')
       .eq('user_id', userId)
-      .order('last_studied', { ascending: false })
+      .order('last_studied', { ascending: false, nullsFirst: false })
 
     return NextResponse.json({ roadmaps: roadmaps || [] })
   }
