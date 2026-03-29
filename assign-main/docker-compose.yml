@@ -1,0 +1,72 @@
+services:
+
+  # ── PostgreSQL with pgvector ─────────────────────────────────────────────────
+  # Only used for local development.
+  # For production, point the backend at your hosted Supabase instead.
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: assign_db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB:       assign
+      POSTGRES_USER:     postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      # Auto-runs schema.sql on first start (only when the data volume is empty)
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d assign"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Python FastAPI backend ───────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: assign_backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Override CORS to allow the frontend container
+      ALLOWED_ORIGINS: "http://localhost:3000,http://frontend:3000"
+      APP_ENV: production
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Next.js frontend ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_SUPABASE_URL:     ${NEXT_PUBLIC_SUPABASE_URL}
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+        NEXT_PUBLIC_API_URL:          http://localhost:8000
+    container_name: assign_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_SUPABASE_URL:      ${NEXT_PUBLIC_SUPABASE_URL}
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      NEXT_PUBLIC_API_URL:           http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  db_data:
