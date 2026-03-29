@@ -16,6 +16,13 @@ interface Roadmap {
   sources_hit: string[]
 }
 
+const MODES = [
+  { label: 'trek',   desc: 'full courses',   href: '/trek'   },
+  { label: 'spark',  desc: 'quick prep',     href: '/spark'  },
+  { label: 'recall', desc: 'spaced review',  href: '/recall' },
+  { label: 'build',  desc: 'pair program',   href: '/build'  },
+]
+
 export default function Dashboard() {
   const [roadmaps, setRoadmaps] = useState<Roadmap[]>([])
   const [loading, setLoading] = useState(true)
@@ -27,10 +34,10 @@ export default function Dashboard() {
     const load = async () => {
       const { data: { session } } = await supabase.auth.getSession()
       if (!session) { router.push('/'); return }
-
       setUser({ email: session.user.email || '', id: session.user.id })
-
-      const res = await fetch(`/api/roadmap?userId=${session.user.id}`)
+      const res = await fetch(`/api/roadmap?userId=${session.user.id}`, {
+        headers: { Authorization: `Bearer ${session.access_token}` }
+      })
       const data = await res.json()
       setRoadmaps(data.roadmaps || [])
       setLoading(false)
@@ -59,154 +66,356 @@ export default function Dashboard() {
     return `${Math.floor(hours / 24)}d ago`
   }
 
-  const sourceColors: Record<string, string> = {
-    wikipedia: '#FFE500', wikidata: '#00FF87', openAlex: '#A855F7',
-    stackOverflow: '#FF6B00', github: '#fff', npm: '#CB3837', devdocs: '#3D9BE9'
-  }
-
   return (
-    <main style={{ minHeight: '100vh', background: '#080808', color: '#fff', fontFamily: "'Syne', sans-serif" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        .grain { position: fixed; inset: 0; pointer-events: none; z-index: 0; opacity: 0.025; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E"); }
-        .roadmap-card { background: #0e0e0e; border: 1px solid #1a1a1a; border-radius: 16px; padding: 20px; transition: border-color 0.2s; }
-        .roadmap-card:hover { border-color: #333; }
-        .progress-bar { background: #1a1a1a; border-radius: 4px; height: 4px; }
-        .resume-btn { background: #00FF87; color: #000; font-weight: 700; font-size: 13px; padding: 10px 18px; border-radius: 10px; border: none; cursor: pointer; font-family: 'Syne', sans-serif; transition: opacity 0.15s; }
-        .resume-btn:hover { opacity: 0.85; }
-        .completed-badge { font-size: 10px; font-family: 'DM Mono', monospace; color: #00FF87; background: #00FF8715; padding: 3px 8px; border-radius: 6px; }
-        .mode-card { background: #0e0e0e; border: 1px solid #1a1a1a; border-radius: 14px; padding: 20px; cursor: pointer; transition: all 0.2s; text-decoration: none; display: block; }
-        .mode-card:hover { border-color: #333; transform: translateY(-1px); }
-        .sign-out-btn { background: none; border: 1px solid #222; border-radius: 10px; color: #444; padding: 8px 16px; cursor: pointer; font-size: 12px; font-family: 'DM Mono', monospace; transition: color 0.15s; }
-        .sign-out-btn:hover { color: #888; }
-        .notes-link { background: none; border: 1px solid #222; border-radius: 10px; color: #444; padding: 8px 14px; font-size: 12px; font-family: 'DM Mono', monospace; text-decoration: none; transition: color 0.15s; }
-        .notes-link:hover { color: #888; }
-      `}</style>
+    <main style={{ minHeight: '100vh', background: 'var(--background)' }}>
+      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 24px' }}>
 
-      <div className="grain" />
+        {/* Nav */}
+        <nav style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: '48px',
+          paddingBottom: '24px',
+          borderBottom: '2px solid var(--border)',
+        }}>
+          <span style={{
+            fontFamily: 'var(--font-serif)',
+            fontSize: '28px',
+            letterSpacing: '-0.5px',
+            color: 'var(--foreground)',
+          }}>
+            assign
+          </span>
 
-      <div style={{ position: 'relative', zIndex: 1, maxWidth: '900px', margin: '0 auto', padding: '40px 24px' }}>
-
-        {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '48px' }}>
-          <div>
-            <div style={{ fontSize: '28px', fontWeight: 800, letterSpacing: '-0.5px', marginBottom: '4px' }}>assign</div>
-            <div style={{ fontSize: '13px', color: '#444', fontFamily: "'DM Mono', monospace" }}>{user?.email}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <span style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '11px',
+              color: 'var(--muted-foreground)',
+            }}>
+              {user?.email}
+            </span>
+            <button
+              onClick={signOut}
+              style={{
+                background: 'none',
+                border: '1.5px solid var(--border)',
+                borderRadius: '4px',
+                padding: '6px 14px',
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                color: 'var(--foreground)',
+                cursor: 'pointer',
+                transition: 'box-shadow 0.15s, transform 0.15s',
+              }}
+              onMouseEnter={e => {
+                e.currentTarget.style.boxShadow = '2px 2px 0px 0px hsl(0 0% 10%)'
+                e.currentTarget.style.transform = 'translate(-1px, -1px)'
+              }}
+              onMouseLeave={e => {
+                e.currentTarget.style.boxShadow = 'none'
+                e.currentTarget.style.transform = 'none'
+              }}
+            >
+              sign out
+            </button>
           </div>
-          <button onClick={signOut} className="sign-out-btn">sign out</button>
-        </div>
+        </nav>
 
         {/* Mode cards */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '12px', marginBottom: '48px' }}>
-          {[
-            { label: 'spark', emoji: '⚡', color: '#FFE500', href: '/spark', desc: 'ask anything' },
-            { label: 'trek', emoji: '🗺️', color: '#00FF87', href: '/trek', desc: 'full courses' },
-            { label: 'recall', emoji: '🔁', color: '#FF2D78', href: '/recall', desc: 'spaced review' },
-            { label: 'build', emoji: '🔨', color: '#FF6B00', href: '/build', desc: 'make something' },
-          ].map(mode => (
-            <a key={mode.label} href={mode.href} className="mode-card">
-              <div style={{ fontSize: '24px', marginBottom: '8px' }}>{mode.emoji}</div>
-              <div style={{ fontSize: '14px', fontWeight: 700, color: mode.color, marginBottom: '2px' }}>{mode.label}</div>
-              <div style={{ fontSize: '11px', color: '#444', fontFamily: "'DM Mono', monospace" }}>{mode.desc}</div>
-            </a>
-          ))}
-        </div>
-
-        {/* Courses header */}
-        <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div style={{ fontSize: '16px', fontWeight: 700 }}>your courses</div>
-          <a href="/trek" style={{ fontSize: '12px', color: '#444', fontFamily: "'DM Mono', monospace", textDecoration: 'none' }}>+ new course</a>
-        </div>
-
-        {/* Course list */}
-        {loading ? (
-          <div style={{ textAlign: 'center', padding: '60px 0', color: '#333', fontFamily: "'DM Mono', monospace", fontSize: '13px' }}>
-            loading...
-          </div>
-        ) : roadmaps.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '60px 0', border: '1px dashed #1a1a1a', borderRadius: '16px' }}>
-            <div style={{ fontSize: '13px', color: '#333', fontFamily: "'DM Mono', monospace", marginBottom: '16px' }}>no courses yet</div>
-            <a href="/trek" style={{ background: '#00FF87', color: '#000', fontWeight: 700, padding: '12px 24px', borderRadius: '12px', textDecoration: 'none', fontSize: '13px' }}>
-              start your first trek →
-            </a>
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            {roadmaps.map(rm => {
-              const done = rm.concepts?.filter(c => c.status === 'done').length || 0
-              const total = rm.concepts?.length || 0
-              const pct = total > 0 ? (done / total) * 100 : 0
-              const currentConcept = rm.concepts?.[rm.current_concept_index]
-
-              return (
-                <div key={rm.id} className="roadmap-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '14px' }}>
-                    <div style={{ flex: 1, minWidth: 0, marginRight: '16px' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
-                        <div style={{ fontSize: '16px', fontWeight: 700 }}>{rm.topic}</div>
-                        {rm.status === 'completed' && <span className="completed-badge">completed</span>}
-                      </div>
-                      <div style={{ fontSize: '12px', color: '#444', fontFamily: "'DM Mono', monospace" }}>
-                        {currentConcept && rm.status !== 'completed'
-                          ? `up next: ${currentConcept.title}`
-                          : `${done} of ${total} concepts`}
-                        {' · '}last studied {timeAgo(rm.last_studied)}
-                      </div>
-                    </div>
-                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-                      <a href={`/trek/materials?id=${rm.id}`} className="notes-link">notes</a>
-                      <button
-                        onClick={() => deleteCourse(rm.id)}
-                        disabled={deleting === rm.id}
-                        style={{ background: 'none', border: '1px solid #222', borderRadius: '10px', color: '#444', padding: '8px 12px', cursor: 'pointer', fontSize: '12px', fontFamily: "'DM Mono', monospace", transition: 'color 0.15s' }}
-                        onMouseEnter={e => (e.currentTarget.style.color = '#ff4444')}
-                        onMouseLeave={e => (e.currentTarget.style.color = '#444')}
-                      >
-                        {deleting === rm.id ? '...' : 'delete'}
-                      </button>
-                      {rm.status !== 'completed' && (
-                        <button className="resume-btn" onClick={() => router.push(`/trek?resume=${rm.id}`)}>
-                          continue →
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="progress-bar">
-                    <div style={{
-                      width: `${pct}%`,
-                      height: '4px',
-                      background: pct === 100 ? '#00FF87' : '#00FF8766',
-                      borderRadius: '4px',
-                      transition: 'width 0.5s ease'
-                    }} />
-                  </div>
-
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                    <div style={{ fontSize: '11px', color: '#333', fontFamily: "'DM Mono', monospace" }}>
-                      {done}/{total} mastered
-                      {rm.total_minutes_estimated > 0 && ` · ~${rm.total_minutes_estimated} min total`}
-                    </div>
-                    <div style={{ display: 'flex', gap: '3px', alignItems: 'center' }}>
-                      {(rm.sources_hit || []).map((s: string) => (
-                        <span
-                          key={s}
-                          title={s}
-                          style={{
-                            width: '5px', height: '5px', borderRadius: '50%',
-                            background: sourceColors[s] || '#333',
-                            display: 'inline-block'
-                          }}
-                        />
-                      ))}
-                    </div>
-                  </div>
+        <section style={{ marginBottom: '52px' }}>
+          <p style={{
+            fontFamily: 'var(--font-mono)',
+            fontSize: '11px',
+            color: 'var(--muted-foreground)',
+            marginBottom: '12px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+          }}>
+            modes
+          </p>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, 1fr)',
+            gap: '10px',
+          }}>
+            {MODES.map(mode => (
+              <a
+                key={mode.label}
+                href={mode.href}
+                className="brutalist-shadow-hover"
+                style={{
+                  display: 'block',
+                  background: 'var(--card)',
+                  border: '2px solid var(--border)',
+                  borderRadius: '4px',
+                  padding: '18px 16px',
+                  textDecoration: 'none',
+                  boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
+                }}
+              >
+                <div style={{
+                  fontFamily: 'var(--font-serif)',
+                  fontSize: '20px',
+                  color: 'var(--foreground)',
+                  marginBottom: '4px',
+                  letterSpacing: '-0.3px',
+                }}>
+                  {mode.label}
                 </div>
-              )
-            })}
+                <div style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11px',
+                  color: 'var(--muted-foreground)',
+                }}>
+                  {mode.desc}
+                </div>
+              </a>
+            ))}
           </div>
-        )}
+        </section>
+
+        {/* Courses */}
+        <section>
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '16px',
+          }}>
+            <p style={{
+              fontFamily: 'var(--font-mono)',
+              fontSize: '11px',
+              color: 'var(--muted-foreground)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.08em',
+            }}>
+              your courses
+            </p>
+            <a
+              href="/trek"
+              style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '11px',
+                color: 'var(--foreground)',
+                textDecoration: 'none',
+                borderBottom: '1px solid var(--border)',
+                paddingBottom: '1px',
+              }}
+            >
+              + new course
+            </a>
+          </div>
+
+          {loading ? (
+            <div style={{
+              padding: '60px 0',
+              textAlign: 'center',
+              fontFamily: 'var(--font-mono)',
+              fontSize: '12px',
+              color: 'var(--muted-foreground)',
+            }}>
+              loading...
+            </div>
+
+          ) : roadmaps.length === 0 ? (
+            <div style={{
+              padding: '60px 24px',
+              textAlign: 'center',
+              border: '2px dashed var(--muted)',
+              borderRadius: '4px',
+            }}>
+              <p style={{
+                fontFamily: 'var(--font-mono)',
+                fontSize: '12px',
+                color: 'var(--muted-foreground)',
+                marginBottom: '20px',
+              }}>
+                no courses yet
+              </p>
+              <a
+                href="/trek"
+                className="brutalist-shadow-hover"
+                style={{
+                  display: 'inline-block',
+                  background: 'var(--foreground)',
+                  color: 'var(--background)',
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                  padding: '12px 24px',
+                  border: '2px solid var(--border)',
+                  borderRadius: '4px',
+                  textDecoration: 'none',
+                  boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
+                }}
+              >
+                start your first trek →
+              </a>
+            </div>
+
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              {roadmaps.map(rm => {
+                const done = rm.concepts?.filter(c => c.status === 'done').length || 0
+                const total = rm.concepts?.length || 0
+                const pct = total > 0 ? (done / total) * 100 : 0
+                const currentConcept = rm.concepts?.[rm.current_concept_index]
+
+                return (
+                  <div
+                    key={rm.id}
+                    style={{
+                      background: 'var(--card)',
+                      border: '2px solid var(--border)',
+                      borderRadius: '4px',
+                      padding: '20px',
+                      boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
+                    }}
+                  >
+                    {/* Top row */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'flex-start',
+                      marginBottom: '16px',
+                    }}>
+                      <div style={{ flex: 1, minWidth: 0, marginRight: '16px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' }}>
+                          <span style={{
+                            fontFamily: 'var(--font-serif)',
+                            fontSize: '19px',
+                            color: 'var(--foreground)',
+                            letterSpacing: '-0.3px',
+                          }}>
+                            {rm.topic}
+                          </span>
+                          {rm.status === 'completed' && (
+                            <span style={{
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '9px',
+                              color: 'var(--foreground)',
+                              background: 'var(--muted)',
+                              border: '1px solid var(--border)',
+                              borderRadius: '2px',
+                              padding: '2px 7px',
+                              textTransform: 'uppercase',
+                              letterSpacing: '0.06em',
+                            }}>
+                              done
+                            </span>
+                          )}
+                        </div>
+                        <span style={{
+                          fontFamily: 'var(--font-mono)',
+                          fontSize: '11px',
+                          color: 'var(--muted-foreground)',
+                        }}>
+                          {currentConcept && rm.status !== 'completed'
+                            ? `up next: ${currentConcept.title}`
+                            : `${done} of ${total} concepts`}
+                          {' · '}last studied {timeAgo(rm.last_studied)}
+                        </span>
+                      </div>
+
+                      {/* Actions */}
+                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
+                        <a
+                          href={`/trek/materials?id=${rm.id}`}
+                          style={{
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '11px',
+                            color: 'var(--foreground)',
+                            textDecoration: 'none',
+                            border: '1.5px solid var(--border)',
+                            borderRadius: '4px',
+                            padding: '6px 12px',
+                            background: 'var(--background)',
+                          }}
+                        >
+                          notes
+                        </a>
+                        <button
+                          onClick={() => deleteCourse(rm.id)}
+                          disabled={deleting === rm.id}
+                          style={{
+                            background: 'none',
+                            border: '1.5px solid var(--border)',
+                            borderRadius: '4px',
+                            padding: '6px 12px',
+                            fontFamily: 'var(--font-mono)',
+                            fontSize: '11px',
+                            color: 'var(--muted-foreground)',
+                            cursor: 'pointer',
+                          }}
+                          onMouseEnter={e => e.currentTarget.style.color = 'hsl(0 70% 45%)'}
+                          onMouseLeave={e => e.currentTarget.style.color = 'var(--muted-foreground)'}
+                        >
+                          {deleting === rm.id ? '...' : 'delete'}
+                        </button>
+                        {rm.status !== 'completed' && (
+                          <button
+                            onClick={() => router.push(`/trek?resume=${rm.id}`)}
+                            className="brutalist-shadow-hover"
+                            style={{
+                              background: 'var(--foreground)',
+                              color: 'var(--background)',
+                              fontFamily: 'var(--font-mono)',
+                              fontSize: '11px',
+                              fontWeight: 500,
+                              padding: '7px 16px',
+                              border: '2px solid var(--border)',
+                              borderRadius: '4px',
+                              cursor: 'pointer',
+                              boxShadow: '3px 3px 0px 0px hsl(0 0% 10%)',
+                            }}
+                          >
+                            continue →
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div style={{
+                      height: '5px',
+                      background: 'var(--muted)',
+                      border: '1px solid var(--border)',
+                      borderRadius: '2px',
+                      overflow: 'hidden',
+                    }}>
+                      <div style={{
+                        width: `${pct}%`,
+                        height: '100%',
+                        background: 'var(--foreground)',
+                        borderRadius: '2px',
+                        transition: 'width 0.5s ease',
+                      }} />
+                    </div>
+
+                    {/* Bottom row */}
+                    <div style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginTop: '8px',
+                    }}>
+                      <span style={{
+                        fontFamily: 'var(--font-mono)',
+                        fontSize: '10px',
+                        color: 'var(--muted-foreground)',
+                      }}>
+                        {done}/{total} mastered
+                        {rm.total_minutes_estimated > 0 && ` · ~${rm.total_minutes_estimated} min`}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </section>
       </div>
     </main>
   )
