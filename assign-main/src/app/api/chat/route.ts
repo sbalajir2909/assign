@@ -1,4 +1,3 @@
-export const runtime = 'edge'
 
 import { NextRequest, NextResponse } from 'next/server'
 import { SPARK_PROMPT, TREK_PROMPT, RECALL_PROMPT, BUILD_PROMPT } from '@/lib/prompts'
