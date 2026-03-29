@@ -1,9 +1,26 @@
-import Groq from 'groq-sdk'
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const getGroq = () => new Groq({ apiKey: process.env.GROQ_API_KEY })
 const SCRAPER_URL = process.env.SCRAPER_URL || 'https://assign-scraper-production.up.railway.app'
+const CF_ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID
+const CF_API_TOKEN  = process.env.CLOUDFLARE_API_TOKEN
+const CF_MODEL      = '@cf/meta/llama-3.3-70b-instruct-fp8-fast'
+
+async function cfAI(messages: { role: string; content: string }[], maxTokens = 400, temperature = 0.7): Promise<string> {
+  const res = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT_ID}/ai/run/${CF_MODEL}`,
+    {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${CF_API_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ messages, max_tokens: maxTokens, temperature }),
+    }
+  )
+  const data = await res.json() as { result?: { response?: string } }
+  return data.result?.response || ''
+}
 
 const getSupabase = () => createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -100,19 +117,13 @@ export async function POST(req: NextRequest) {
 
     // LLM fallback
     const { topic, level, goal, time } = discoveryAnswers
-    const completion = await getGroq().chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        {
-          role: 'system',
-          content: `Generate a course as JSON: { gist: { emphasis, outcomes, prereqs }, concepts: [{ title, description, why, subtopics, estimatedMinutes, prereq, sources }] }. 5-7 concepts. Specific titles only — never "Introduction" or "Basics". Respond with JSON only.`
-        },
-        { role: 'user', content: `Topic: ${topic}, Level: ${level}, Goal: ${goal}, Time: ${time}` }
-      ],
-      max_tokens: 2000,
-      temperature: 0.3
-    })
-    const raw = completion.choices[0].message.content || ''
+    const raw = await cfAI([
+      {
+        role: 'system',
+        content: `Generate a course as JSON: { gist: { emphasis, outcomes, prereqs }, concepts: [{ title, description, why, subtopics, estimatedMinutes, prereq, sources }] }. 5-7 concepts. Specific titles only — never "Introduction" or "Basics". Respond with JSON only.`
+      },
+      { role: 'user', content: `Topic: ${topic}, Level: ${level}, Goal: ${goal}, Time: ${time}` }
+    ], 2000, 0.3)
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
       if (jsonMatch) return NextResponse.json({ course: JSON.parse(jsonMatch[0]), sourcesHit: [] })
@@ -123,16 +134,10 @@ export async function POST(req: NextRequest) {
 
   // ── Plan teaching strategy ─────────────────────────────────────────────────
   if (phase === 'plan' && conceptTitle && learnerProfile) {
-    const completion = await getGroq().chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: PLANNER_SYSTEM },
-        { role: 'user', content: `Concept: ${conceptTitle}\nLearner: ${JSON.stringify(learnerProfile)}` }
-      ],
-      max_tokens: 400,
-      temperature: 0.3
-    })
-    const raw = completion.choices[0].message.content || ''
+    const raw = await cfAI([
+      { role: 'system', content: PLANNER_SYSTEM },
+      { role: 'user', content: `Concept: ${conceptTitle}\nLearner: ${JSON.stringify(learnerProfile)}` }
+    ], 400, 0.3)
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
       if (jsonMatch) return NextResponse.json({ plan: JSON.parse(jsonMatch[0]) })
@@ -156,14 +161,7 @@ Learner profile: ${JSON.stringify(learnerProfile)}
 Current concept: ${conceptTitle}
 ${conversationContext ? `Context from previous session: ${conversationContext}` : ''}`
 
-    const completion = await getGroq().chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [{ role: 'system', content: systemContent }, ...messages],
-      max_tokens: 400,
-      temperature: 0.7
-    })
-
-    const raw = completion.choices[0].message.content || ''
+    const raw = await cfAI([{ role: 'system', content: systemContent }, ...messages], 400, 0.7)
     const conceptMastered = raw.includes('[CONCEPT_MASTERED]')
     const reply = raw.replace('[CONCEPT_MASTERED]', '').trim()
     return NextResponse.json({ reply, conceptMastered })
@@ -175,20 +173,13 @@ ${conversationContext ? `Context from previous session: ${conversationContext}` 
       .map((m: Message) => `${m.role}: ${m.content}`)
       .join('\n')
 
-    const completion = await getGroq().chat.completions.create({
-      model: 'llama-3.3-70b-versatile',
-      messages: [
-        { role: 'system', content: SUMMARY_SYSTEM },
-        {
-          role: 'user',
-          content: `Concept: ${conceptTitle}\nLearner goal: ${learnerProfile?.goal || 'understand deeply'}\n\nConversation where they learned this:\n${conversationText.slice(0, 3000)}`
-        }
-      ],
-      max_tokens: 1000,
-      temperature: 0.3
-    })
-
-    const raw = completion.choices[0].message.content || ''
+    const raw = await cfAI([
+      { role: 'system', content: SUMMARY_SYSTEM },
+      {
+        role: 'user',
+        content: `Concept: ${conceptTitle}\nLearner goal: ${learnerProfile?.goal || 'understand deeply'}\n\nConversation where they learned this:\n${conversationText.slice(0, 3000)}`
+      }
+    ], 1000, 0.3)
     try {
       const jsonMatch = raw.match(/\{[\s\S]*\}/)
       if (jsonMatch) {
