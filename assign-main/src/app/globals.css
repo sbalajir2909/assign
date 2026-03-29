@@ -2,15 +2,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: hsl(0 0% 5%);
-  --foreground: hsl(0 0% 98%);
-  --card: hsl(0 0% 9%);
-  --muted: hsl(0 0% 14%);
-  --muted-foreground: hsl(0 0% 55%);
-  --primary: hsl(54 100% 50%);
-  --primary-foreground: hsl(0 0% 5%);
-  --border: hsl(0 0% 18%);
-  --accent: hsl(54 100% 50%);
+  --background: hsl(40 14% 93%);
+  --foreground: hsl(0 0% 10%);
+  --card: hsl(40 14% 91%);
+  --muted: hsl(40 10% 88%);
+  --muted-foreground: hsl(0 0% 40%);
+  --primary: hsl(208 82% 57%);
+  --primary-foreground: hsl(0 0% 10%);
+  --border: hsl(0 0% 10%);
 }
 
 @theme inline {
@@ -35,28 +34,26 @@ body {
   font-family: 'Inter', sans-serif;
 }
 
-/* Brutalist shadow utilities */
 .brutalist-shadow {
-  box-shadow: 4px 4px 0px 0px hsl(54 100% 50%);
+  box-shadow: 4px 4px 0px 0px hsl(0 0% 10%);
 }
 .brutalist-shadow-sm {
-  box-shadow: 2px 2px 0px 0px hsl(54 100% 50%);
+  box-shadow: 2px 2px 0px 0px hsl(0 0% 10%);
 }
 .brutalist-shadow-lg {
-  box-shadow: 6px 6px 0px 0px hsl(54 100% 50%);
+  box-shadow: 6px 6px 0px 0px hsl(0 0% 10%);
 }
 .brutalist-shadow-hover {
   transition: box-shadow 0.15s ease, transform 0.15s ease;
 }
 .brutalist-shadow-hover:hover {
-  box-shadow: 6px 6px 0px 0px hsl(54 100% 50%);
+  box-shadow: 6px 6px 0px 0px hsl(0 0% 10%);
   transform: translate(-2px, -2px);
 }
 .brutalist-shadow-white-lg {
-  box-shadow: 6px 6px 0px 0px hsl(0 0% 98%);
+  box-shadow: 6px 6px 0px 0px hsl(40 14% 93%);
 }
 
-/* Marquee animation */
 @keyframes marquee {
   0% { transform: translateX(0); }
   100% { transform: translateX(-50%); }
