@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const supabase = createClient(
+const getSupabase = () => createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
   process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
 )
@@ -13,7 +13,7 @@ export async function GET(req: NextRequest) {
 
   if (roadmapId) {
     // Load specific roadmap with its materials
-    const { data: roadmap, error } = await supabase
+    const { data: roadmap, error } = await getSupabase()
       .from('roadmaps')
       .select('*')
       .eq('id', roadmapId)
@@ -23,7 +23,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'roadmap not found' }, { status: 404 })
     }
 
-    const { data: materials } = await supabase
+    const { data: materials } = await getSupabase()
       .from('concept_materials')
       .select('*')
       .eq('roadmap_id', roadmapId)
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
 
   if (userId) {
     // Load all roadmaps for dashboard
-    const { data: roadmaps } = await supabase
+    const { data: roadmaps } = await getSupabase()
       .from('roadmaps')
       .select('id, topic, status, current_concept_index, concepts, created_at, last_studied, total_minutes_estimated, sources_hit')
       .eq('user_id', userId)
@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json()
   const { userId, topic, concepts, learnerProfile, sourcesHit, totalMinutes } = body
 
-  const { data, error } = await supabase
+  const { data, error } = await getSupabase()
     .from('roadmaps')
     .insert({
       user_id: userId,
@@ -90,7 +90,7 @@ export async function PATCH(req: NextRequest) {
   if (conceptSummaries !== undefined) updates.concept_summaries = conceptSummaries
   if (status !== undefined) updates.status = status
 
-  const { error } = await supabase
+  const { error } = await getSupabase()
     .from('roadmaps')
     .update(updates)
     .eq('id', roadmapId)
