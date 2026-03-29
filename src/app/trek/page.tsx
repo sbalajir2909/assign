@@ -21,6 +21,13 @@ interface ConceptMaterial {
 type Phase = 'discovery' | 'gist' | 'learning'
 type SidebarTab = 'roadmap' | 'materials'
 
+const DISCOVERY_QUESTIONS = [
+  'what topic do you want to understand end to end?',
+  "okay and what's your current level with this — never touched it, heard of it, or used it a bit?",
+  "got it. what's the goal — understand the concepts deeply, build something with it, or prep for an exam/interview?",
+  'last one — how much time do you have to learn this? like per day and overall.'
+]
+
 const mono: React.CSSProperties = { fontFamily: 'var(--font-mono)' }
 const serif: React.CSSProperties = { fontFamily: 'var(--font-serif)' }
 const label: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--muted-foreground)' }
@@ -110,10 +117,15 @@ function TrekPageInner() {
 
   const askNextQuestion = async (idx: number) => {
     setLoading(true)
-    const res = await fetch('/api/trek', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ phase: 'discovery', questionIndex: idx }) })
-    const data = await res.json()
-    setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
-    setLoading(false)
+    try {
+      const reply = DISCOVERY_QUESTIONS[idx]
+      if (!reply) throw new Error(`missing discovery question for index ${idx}`)
+      setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'something went wrong loading trek. refresh and try again.' }])
+    } finally {
+      setLoading(false)
+    }
   }
 
   const generateCourse = async (answers: LearnerProfile) => {

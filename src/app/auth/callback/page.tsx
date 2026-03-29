@@ -10,10 +10,35 @@ export default function AuthCallback() {
   const router = useRouter()
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) router.push('/')
-      else router.push('/login')
+    let active = true
+
+    const finishAuth = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!active) return false
+      if (session) {
+        router.replace('/dashboard')
+        return true
+      }
+      return false
+    }
+
+    finishAuth()
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (!active) return
+      if (session) router.replace('/dashboard')
     })
+
+    const timeout = window.setTimeout(async () => {
+      const hasSession = await finishAuth()
+      if (!hasSession && active) router.replace('/login')
+    }, 1500)
+
+    return () => {
+      active = false
+      window.clearTimeout(timeout)
+      subscription.unsubscribe()
+    }
   }, [router])
 
   return (

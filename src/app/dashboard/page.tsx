@@ -33,7 +33,11 @@ export default function Dashboard() {
   useEffect(() => {
     const load = async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session) { router.push('/'); return }
+      if (!session) {
+        setLoading(false)
+        router.replace('/login')
+        return
+      }
       setUser({ email: session.user.email || '', id: session.user.id })
       const res = await fetch(`/api/roadmap?userId=${session.user.id}`, {
         headers: { Authorization: `Bearer ${session.access_token}` }
@@ -47,7 +51,7 @@ export default function Dashboard() {
 
   const signOut = async () => {
     await supabase.auth.signOut()
-    router.push('/')
+    router.replace('/login')
   }
 
   const deleteCourse = async (id: string) => {
