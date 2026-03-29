@@ -17,10 +17,10 @@ interface Roadmap {
 }
 
 const MODES = [
-  { label: 'trek',   desc: 'full courses',   href: '/trek'   },
-  { label: 'spark',  desc: 'quick prep',     href: '/spark'  },
-  { label: 'recall', desc: 'spaced review',  href: '/recall' },
-  { label: 'build',  desc: 'pair program',   href: '/build'  },
+  { label: 'trek',   emoji: '🗺️', tagline: 'learn it end to end.',      desc: 'AI builds you a full course, teaches concept by concept using Socratic dialogue, and tracks your progress.', href: '/trek'   },
+  { label: 'spark',  emoji: '⚡',  tagline: 'stuck on one thing?',       desc: 'Drop in one topic. AI finds exactly what you don\'t know and fixes only that — fast.',                          href: '/spark'  },
+  { label: 'recall', emoji: '🧠',  tagline: 'prove you know it.',        desc: 'Explain a topic from scratch. AI listens, then tells you exactly what broke down.',                              href: '/recall' },
+  { label: 'build',  emoji: '🔨',  tagline: 'figure it out yourself.',   desc: 'Pair programmer that never writes code for you. It asks until you get there.',                                   href: '/build'  },
 ]
 
 export default function Dashboard() {
@@ -67,110 +67,43 @@ export default function Dashboard() {
   }
 
   return (
-    <main style={{ minHeight: '100vh', background: 'var(--background)' }}>
-      <div style={{ maxWidth: '860px', margin: '0 auto', padding: '32px 24px' }}>
+    <main className="min-h-screen bg-background text-foreground">
 
-        {/* Nav */}
-        <nav style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: '48px',
-          paddingBottom: '24px',
-          borderBottom: '2px solid var(--border)',
-        }}>
-          <span style={{
-            fontFamily: 'var(--font-serif)',
-            fontSize: '28px',
-            letterSpacing: '-0.5px',
-            color: 'var(--foreground)',
-          }}>
-            assign
-          </span>
+      {/* Nav */}
+      <nav className="flex justify-between items-center px-10 py-5 border-b-2 border-foreground">
+        <a href="/" className="flex items-center gap-2 no-underline">
+          <span className="w-2 h-2 rounded-full bg-primary inline-block" />
+          <span className="font-mono text-lg font-medium text-foreground tracking-tight">assign</span>
+        </a>
+        <div className="flex items-center gap-5">
+          <span className="font-mono text-xs text-muted-foreground">{user?.email}</span>
+          <button onClick={signOut} className="brutalist-shadow-hover font-mono text-xs border-2 border-foreground px-4 py-2 bg-background text-foreground cursor-pointer">
+            sign out
+          </button>
+        </div>
+      </nav>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <span style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '11px',
-              color: 'var(--muted-foreground)',
-            }}>
-              {user?.email}
-            </span>
-            <button
-              onClick={signOut}
-              style={{
-                background: 'none',
-                border: '1.5px solid var(--border)',
-                borderRadius: '4px',
-                padding: '6px 14px',
-                fontFamily: 'var(--font-mono)',
-                fontSize: '11px',
-                color: 'var(--foreground)',
-                cursor: 'pointer',
-                transition: 'box-shadow 0.15s, transform 0.15s',
-              }}
-              onMouseEnter={e => {
-                e.currentTarget.style.boxShadow = '2px 2px 0px 0px hsl(0 0% 10%)'
-                e.currentTarget.style.transform = 'translate(-1px, -1px)'
-              }}
-              onMouseLeave={e => {
-                e.currentTarget.style.boxShadow = 'none'
-                e.currentTarget.style.transform = 'none'
-              }}
-            >
-              sign out
-            </button>
-          </div>
-        </nav>
+      <div className="max-w-6xl mx-auto px-10 py-14">
+
+        {/* Header */}
+        <div className="mb-14">
+          <h1 className="text-6xl leading-tight tracking-tight text-foreground" style={{ fontFamily: "'Instrument Serif', serif", fontStyle: 'italic' }}>
+            what do you want<br />
+            <span className="text-primary">to learn today?</span>
+          </h1>
+        </div>
 
         {/* Mode cards */}
-        <section style={{ marginBottom: '52px' }}>
-          <p style={{
-            fontFamily: 'var(--font-mono)',
-            fontSize: '11px',
-            color: 'var(--muted-foreground)',
-            marginBottom: '12px',
-            textTransform: 'uppercase',
-            letterSpacing: '0.08em',
-          }}>
-            modes
-          </p>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
-            gap: '10px',
-          }}>
+        <section className="mb-16">
+          <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest mb-5">choose a mode</p>
+          <div className="grid grid-cols-4 gap-4">
             {MODES.map(mode => (
-              <a
-                key={mode.label}
-                href={mode.href}
-                className="brutalist-shadow-hover"
-                style={{
-                  display: 'block',
-                  background: 'var(--card)',
-                  border: '2px solid var(--border)',
-                  borderRadius: '4px',
-                  padding: '18px 16px',
-                  textDecoration: 'none',
-                  boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
-                }}
-              >
-                <div style={{
-                  fontFamily: 'var(--font-serif)',
-                  fontSize: '20px',
-                  color: 'var(--foreground)',
-                  marginBottom: '4px',
-                  letterSpacing: '-0.3px',
-                }}>
-                  {mode.label}
-                </div>
-                <div style={{
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '11px',
-                  color: 'var(--muted-foreground)',
-                }}>
-                  {mode.desc}
-                </div>
+              <a key={mode.label} href={mode.href}
+                className="brutalist-shadow brutalist-shadow-hover block border-2 border-foreground bg-card p-6 no-underline">
+                <div className="text-3xl mb-4">{mode.emoji}</div>
+                <div className="font-mono font-bold text-xl text-foreground mb-1 uppercase tracking-tight">{mode.label}</div>
+                <div className="font-mono text-xs text-primary mb-3">{mode.tagline}</div>
+                <div className="font-sans text-xs text-muted-foreground leading-relaxed">{mode.desc}</div>
               </a>
             ))}
           </div>
@@ -178,85 +111,26 @@ export default function Dashboard() {
 
         {/* Courses */}
         <section>
-          <div style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: '16px',
-          }}>
-            <p style={{
-              fontFamily: 'var(--font-mono)',
-              fontSize: '11px',
-              color: 'var(--muted-foreground)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.08em',
-            }}>
-              your courses
-            </p>
-            <a
-              href="/trek"
-              style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '11px',
-                color: 'var(--foreground)',
-                textDecoration: 'none',
-                borderBottom: '1px solid var(--border)',
-                paddingBottom: '1px',
-              }}
-            >
+          <div className="flex justify-between items-center mb-5">
+            <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">your trek courses</p>
+            <a href="/trek" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
               + new course
             </a>
           </div>
 
           {loading ? (
-            <div style={{
-              padding: '60px 0',
-              textAlign: 'center',
-              fontFamily: 'var(--font-mono)',
-              fontSize: '12px',
-              color: 'var(--muted-foreground)',
-            }}>
-              loading...
-            </div>
+            <div className="py-20 text-center font-mono text-xs text-muted-foreground">loading...</div>
 
           ) : roadmaps.length === 0 ? (
-            <div style={{
-              padding: '60px 24px',
-              textAlign: 'center',
-              border: '2px dashed var(--muted)',
-              borderRadius: '4px',
-            }}>
-              <p style={{
-                fontFamily: 'var(--font-mono)',
-                fontSize: '12px',
-                color: 'var(--muted-foreground)',
-                marginBottom: '20px',
-              }}>
-                no courses yet
-              </p>
-              <a
-                href="/trek"
-                className="brutalist-shadow-hover"
-                style={{
-                  display: 'inline-block',
-                  background: 'var(--foreground)',
-                  color: 'var(--background)',
-                  fontFamily: 'var(--font-mono)',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                  padding: '12px 24px',
-                  border: '2px solid var(--border)',
-                  borderRadius: '4px',
-                  textDecoration: 'none',
-                  boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
-                }}
-              >
-                start your first trek →
+            <div className="py-16 px-6 text-center border-2 border-dashed border-muted">
+              <p className="font-mono text-sm text-muted-foreground mb-6">no courses yet — start your first trek</p>
+              <a href="/trek" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
+                start trek →
               </a>
             </div>
 
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+            <div className="flex flex-col gap-3">
               {roadmaps.map(rm => {
                 const done = rm.concepts?.filter(c => c.status === 'done').length || 0
                 const total = rm.concepts?.length || 0
@@ -264,113 +138,35 @@ export default function Dashboard() {
                 const currentConcept = rm.concepts?.[rm.current_concept_index]
 
                 return (
-                  <div
-                    key={rm.id}
-                    style={{
-                      background: 'var(--card)',
-                      border: '2px solid var(--border)',
-                      borderRadius: '4px',
-                      padding: '20px',
-                      boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)',
-                    }}
-                  >
-                    {/* Top row */}
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'flex-start',
-                      marginBottom: '16px',
-                    }}>
-                      <div style={{ flex: 1, minWidth: 0, marginRight: '16px' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '5px' }}>
-                          <span style={{
-                            fontFamily: 'var(--font-serif)',
-                            fontSize: '19px',
-                            color: 'var(--foreground)',
-                            letterSpacing: '-0.3px',
-                          }}>
-                            {rm.topic}
-                          </span>
+                  <div key={rm.id} className="brutalist-shadow bg-card border-2 border-foreground p-6">
+                    <div className="flex justify-between items-start mb-5">
+                      <div className="flex-1 min-w-0 mr-4">
+                        <div className="flex items-center gap-3 mb-1">
+                          <span className="font-mono font-bold text-lg text-foreground tracking-tight">{rm.topic}</span>
                           {rm.status === 'completed' && (
-                            <span style={{
-                              fontFamily: 'var(--font-mono)',
-                              fontSize: '9px',
-                              color: 'var(--foreground)',
-                              background: 'var(--muted)',
-                              border: '1px solid var(--border)',
-                              borderRadius: '2px',
-                              padding: '2px 7px',
-                              textTransform: 'uppercase',
-                              letterSpacing: '0.06em',
-                            }}>
-                              done
-                            </span>
+                            <span className="font-mono text-xs text-primary border border-primary px-2 py-0.5 uppercase tracking-wider">done</span>
                           )}
                         </div>
-                        <span style={{
-                          fontFamily: 'var(--font-mono)',
-                          fontSize: '11px',
-                          color: 'var(--muted-foreground)',
-                        }}>
+                        <span className="font-mono text-xs text-muted-foreground">
                           {currentConcept && rm.status !== 'completed'
                             ? `up next: ${currentConcept.title}`
-                            : `${done} of ${total} concepts`}
+                            : `${done} of ${total} concepts mastered`}
                           {' · '}last studied {timeAgo(rm.last_studied)}
                         </span>
                       </div>
 
-                      {/* Actions */}
-                      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexShrink: 0 }}>
-                        <a
-                          href={`/trek/materials?id=${rm.id}`}
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '11px',
-                            color: 'var(--foreground)',
-                            textDecoration: 'none',
-                            border: '1.5px solid var(--border)',
-                            borderRadius: '4px',
-                            padding: '6px 12px',
-                            background: 'var(--background)',
-                          }}
-                        >
+                      <div className="flex gap-2 items-center flex-shrink-0">
+                        <a href={`/trek/materials?id=${rm.id}`}
+                          className="font-mono text-xs text-foreground border-2 border-foreground px-3 py-2 bg-background no-underline hover:bg-muted transition-colors">
                           notes
                         </a>
-                        <button
-                          onClick={() => deleteCourse(rm.id)}
-                          disabled={deleting === rm.id}
-                          style={{
-                            background: 'none',
-                            border: '1.5px solid var(--border)',
-                            borderRadius: '4px',
-                            padding: '6px 12px',
-                            fontFamily: 'var(--font-mono)',
-                            fontSize: '11px',
-                            color: 'var(--muted-foreground)',
-                            cursor: 'pointer',
-                          }}
-                          onMouseEnter={e => e.currentTarget.style.color = 'hsl(0 70% 45%)'}
-                          onMouseLeave={e => e.currentTarget.style.color = 'var(--muted-foreground)'}
-                        >
+                        <button onClick={() => deleteCourse(rm.id)} disabled={deleting === rm.id}
+                          className="font-mono text-xs text-muted-foreground border-2 border-muted px-3 py-2 bg-background cursor-pointer hover:text-red-500 transition-colors">
                           {deleting === rm.id ? '...' : 'delete'}
                         </button>
                         {rm.status !== 'completed' && (
-                          <button
-                            onClick={() => router.push(`/trek?resume=${rm.id}`)}
-                            className="brutalist-shadow-hover"
-                            style={{
-                              background: 'var(--foreground)',
-                              color: 'var(--background)',
-                              fontFamily: 'var(--font-mono)',
-                              fontSize: '11px',
-                              fontWeight: 500,
-                              padding: '7px 16px',
-                              border: '2px solid var(--border)',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              boxShadow: '3px 3px 0px 0px hsl(0 0% 10%)',
-                            }}
-                          >
+                          <button onClick={() => router.push(`/trek?resume=${rm.id}`)}
+                            className="brutalist-shadow brutalist-shadow-hover font-mono text-xs font-bold bg-primary text-foreground px-5 py-2 border-2 border-foreground cursor-pointer">
                             continue →
                           </button>
                         )}
@@ -378,37 +174,12 @@ export default function Dashboard() {
                     </div>
 
                     {/* Progress bar */}
-                    <div style={{
-                      height: '5px',
-                      background: 'var(--muted)',
-                      border: '1px solid var(--border)',
-                      borderRadius: '2px',
-                      overflow: 'hidden',
-                    }}>
-                      <div style={{
-                        width: `${pct}%`,
-                        height: '100%',
-                        background: 'var(--foreground)',
-                        borderRadius: '2px',
-                        transition: 'width 0.5s ease',
-                      }} />
+                    <div className="h-1.5 bg-muted border border-foreground overflow-hidden mb-2">
+                      <div className="h-full bg-primary transition-all duration-500" style={{ width: `${pct}%` }} />
                     </div>
-
-                    {/* Bottom row */}
-                    <div style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      marginTop: '8px',
-                    }}>
-                      <span style={{
-                        fontFamily: 'var(--font-mono)',
-                        fontSize: '10px',
-                        color: 'var(--muted-foreground)',
-                      }}>
-                        {done}/{total} mastered
-                        {rm.total_minutes_estimated > 0 && ` · ~${rm.total_minutes_estimated} min`}
-                      </span>
+                    <div className="flex justify-between font-mono text-xs text-muted-foreground">
+                      <span>{done}/{total} mastered</span>
+                      {rm.total_minutes_estimated > 0 && <span>~{rm.total_minutes_estimated} min total</span>}
                     </div>
                   </div>
                 )
