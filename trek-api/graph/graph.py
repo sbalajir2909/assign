@@ -1,6 +1,7 @@
 import os
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.postgres import PostgresSaver
+from psycopg_pool import ConnectionPool
 from graph.state import TrekState
 from agents.discovery_agent import discovery_agent
 from agents.curriculum_agent import curriculum_agent
@@ -66,7 +67,13 @@ def _after_teaching(state: TrekState) -> str:
     return "memory_save" if state.get("concept_mastered") else "end"
 
 
-def get_checkpointer():
+def get_checkpointer() -> PostgresSaver:
     conn_str = os.environ["SUPABASE_DB_CONNECTION_STRING"]
-    # Returns a context manager — must be used with `with` in the caller
-    return PostgresSaver.from_conn_string(conn_str)
+    pool = ConnectionPool(
+        conninfo=conn_str,
+        max_size=20,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    pool.open()
+    return PostgresSaver(pool)
