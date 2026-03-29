@@ -28,10 +28,10 @@ compiled_graph = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global compiled_graph
-    checkpointer = get_checkpointer()
-    checkpointer.setup()          # Creates LangGraph checkpoint tables in Supabase
-    compiled_graph = build_graph(checkpointer)
-    yield
+    with get_checkpointer() as checkpointer:
+        checkpointer.setup()      # Creates LangGraph checkpoint tables in Supabase
+        compiled_graph = build_graph(checkpointer)
+        yield
 
 
 app = FastAPI(title="Trek API", version="1.0.0", lifespan=lifespan)

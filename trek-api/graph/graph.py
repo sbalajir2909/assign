@@ -66,6 +66,7 @@ def _after_teaching(state: TrekState) -> str:
     return "memory_save" if state.get("concept_mastered") else "end"
 
 
-def get_checkpointer() -> PostgresSaver:
+def get_checkpointer():
     conn_str = os.environ["SUPABASE_DB_CONNECTION_STRING"]
+    # Returns a context manager — must be used with `with` in the caller
     return PostgresSaver.from_conn_string(conn_str)
