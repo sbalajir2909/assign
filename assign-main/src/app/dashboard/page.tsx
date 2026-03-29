@@ -59,7 +59,7 @@ export default function Dashboard() {
   }
 
   const timeAgo = (date: string) => {
-    const diff = Date.now() - new Date(date).getTime()
+    const diff = new Date().getTime() - new Date(date).getTime()
     const hours = Math.floor(diff / 3600000)
     if (hours < 1) return 'just now'
     if (hours < 24) return `${hours}h ago`
