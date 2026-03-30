@@ -9,9 +9,9 @@
     "lint": "eslint .",
     "clean": "rm -rf .next node_modules/.cache",
     "build:clean": "npm run clean && next build",
-    "build:worker": "npx @opennextjs/cloudflare build",
-    "preview:worker": "npx wrangler pages dev",
-    "deploy:worker": "npx wrangler pages deploy"
+    "build:worker": "npx opennextjs-cloudflare build",
+    "preview:worker": "npx opennextjs-cloudflare preview",
+    "deploy:worker": "npx opennextjs-cloudflare deploy"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
