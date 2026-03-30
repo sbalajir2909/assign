@@ -2,5 +2,4 @@ name = "assign"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 main = ".open-next/worker.js"
-account_id = "5bb76bcf65a2284219f22aba4db52a41"
 assets = { directory = ".open-next/assets", binding = "ASSETS" }
