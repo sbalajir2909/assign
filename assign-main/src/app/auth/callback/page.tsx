@@ -13,6 +13,20 @@ export default function AuthCallback() {
     let active = true
 
     const finishAuth = async () => {
+      const params = new URLSearchParams(window.location.search)
+      const authCode = params.get('code')
+      const authError = params.get('error_description') || params.get('error')
+
+      if (authError) return false
+
+      if (authCode) {
+        const { error } = await supabase.auth.exchangeCodeForSession(authCode)
+        if (error) {
+          console.error('[auth callback]', error)
+          return false
+        }
+      }
+
       const { data: { session } } = await supabase.auth.getSession()
       if (!active) return false
       if (session) {
@@ -22,21 +36,18 @@ export default function AuthCallback() {
       return false
     }
 
-    finishAuth()
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (!active) return
-      if (session) router.replace('/dashboard')
+    finishAuth().then(hasSession => {
+      if (!hasSession && active) router.replace('/login')
     })
 
-    const timeout = window.setTimeout(async () => {
-      const hasSession = await finishAuth()
-      if (!hasSession && active) router.replace('/login')
-    }, 1500)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active) return
+      if (session) router.replace('/dashboard')
+      else if (event === 'SIGNED_OUT') router.replace('/login')
+    })
 
     return () => {
       active = false
-      window.clearTimeout(timeout)
       subscription.unsubscribe()
     }
   }, [router])
