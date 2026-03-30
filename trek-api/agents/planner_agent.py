@@ -9,27 +9,49 @@ from prompts.planner import PLANNER_SYSTEM
 def planner_agent(state: TrekState) -> dict:
     """
     Decides teaching strategy for the current concept.
-    Runs once per concept before learning begins.
-    Transitions phase to 'memory_load'.
+    Uses validated_nodes and new learner profile fields.
     """
-    concepts = state.get("concepts", [])
+    validated_nodes = state.get("validated_nodes", [])
     concept_idx = state.get("current_concept_idx", 0)
 
-    if concept_idx >= len(concepts):
-        return {"phase": "memory_load", "teaching_strategy": "gap_fill", "opening_prompt": ""}
+    if concept_idx >= len(validated_nodes):
+        return {
+            "phase": "memory_load",
+            "teaching_strategy": "gap_fill",
+            "opening_prompt": ""
+        }
 
-    concept = concepts[concept_idx]
+    concept = validated_nodes[concept_idx]
+
     learner_profile = {
         "topic": state.get("topic", ""),
-        "level": state.get("level", ""),
-        "goal": state.get("goal", ""),
-        "time": state.get("time", ""),
+        "exit_condition": state.get("exit_condition", ""),
+        "knowledge_baseline": state.get("knowledge_baseline", {}),
+        "available_hours": state.get("available_hours", 0),
+        "context": state.get("context", ""),
     }
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.3, max_tokens=300)
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0.3,
+        max_tokens=400
+    )
+
     messages = [
         SystemMessage(content=PLANNER_SYSTEM),
-        HumanMessage(content=f"Concept: {concept['title']}\nLearner: {json.dumps(learner_profile)}"),
+        HumanMessage(content=f"""
+Concept to teach:
+- Title: {concept.get('title', '')}
+- Description: {concept.get('description', '')}
+- Why needed: {concept.get('why_needed', '')}
+- Complexity: {concept.get('complexity', 0.5)}
+- Prerequisites mastered: {concept.get('prerequisites', [])}
+
+Learner profile:
+{json.dumps(learner_profile, indent=2)}
+
+Knowledge baseline probe result: {learner_profile['knowledge_baseline'].get('probe_result', 'unknown')}
+""")
     ]
 
     try:
@@ -49,5 +71,5 @@ def planner_agent(state: TrekState) -> dict:
     return {
         "phase": "memory_load",
         "teaching_strategy": "gap_fill",
-        "opening_prompt": f"okay let's start. tell me — what do you already know about {concept['title']}?",
+        "opening_prompt": f"okay let's get into {concept['title']}. what do you already know about it?",
     }

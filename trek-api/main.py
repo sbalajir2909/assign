@@ -33,10 +33,6 @@ compiled_graph = None
 async def lifespan(app: FastAPI):
     global compiled_graph
     checkpointer = await get_checkpointer()
-    try:
-        await checkpointer.setup()
-    except Exception as e:
-        print(f"Checkpointer setup warning (tables may already exist): {e}")
     compiled_graph = build_graph(checkpointer)
     yield
 
@@ -146,6 +142,9 @@ async def send_message(req: MessageRequest):
         discovery_messages = list(current.get("discovery_messages", []))
         discovery_messages.append({"role": "user", "content": req.message})
         patch["discovery_messages"] = discovery_messages
+
+    elif phase == "generation":
+        patch["phase"] = "generation"
 
     # ── Gist phase — user approves or edits ───────────────────────────────────
     elif phase == "gist":

@@ -7,20 +7,21 @@ from prompts.teacher import TEACHER_SYSTEM
 def teaching_agent(state: TrekState) -> dict:
     """
     Socratic tutor using Feynman technique.
-    Injects memory context (past snapshots) into system prompt.
-    Detects [CONCEPT_MASTERED] and sets concept_mastered flag.
+    Uses validated_nodes and new learner profile fields.
+    Does NOT self-mark mastery — that's the mastery_validator's job.
+    Outputs [READY_FOR_MASTERY_CHECK] when it thinks the learner is ready.
     """
-    concepts = state.get("concepts", [])
+    validated_nodes = state.get("validated_nodes", [])
     concept_idx = state.get("current_concept_idx", 0)
     past_snapshots = state.get("past_snapshots", [])
     messages = state.get("messages", [])
+    attempt_count = state.get("concept_attempt_count", 0)
 
-    concept_title = concepts[concept_idx]["title"] if concept_idx < len(concepts) else ""
+    concept = validated_nodes[concept_idx] if concept_idx < len(validated_nodes) else {}
+    concept_title = concept.get("title", "")
 
-    # Build system prompt with learner profile + memory
-    system_prompt = _build_system_prompt(state, concept_title, past_snapshots)
+    system_prompt = _build_system_prompt(state, concept, past_snapshots, attempt_count)
 
-    # Convert messages to LangChain format
     lc_messages = [SystemMessage(content=system_prompt)]
     for msg in messages:
         if msg["role"] == "user":
@@ -28,7 +29,11 @@ def teaching_agent(state: TrekState) -> dict:
         elif msg["role"] == "assistant":
             lc_messages.append(AIMessage(content=msg["content"]))
 
-    llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.7, max_tokens=400)
+    llm = ChatGroq(
+        model="llama-3.3-70b-versatile",
+        temperature=0.7,
+        max_tokens=500
+    )
 
     try:
         response = llm.invoke(lc_messages)
@@ -37,30 +42,46 @@ def teaching_agent(state: TrekState) -> dict:
         print(f"[teaching_agent] error: {e}")
         raw = "something went wrong, try again"
 
-    concept_mastered = "[CONCEPT_MASTERED]" in raw
-    reply = raw.replace("[CONCEPT_MASTERED]", "").strip()
+    # Teaching agent signals readiness for mastery check
+    # but does NOT mark mastery itself
+    ready_for_check = "[READY_FOR_MASTERY_CHECK]" in raw
+    reply = raw.replace("[READY_FOR_MASTERY_CHECK]", "").strip()
 
-    # Append assistant reply to messages
     updated_messages = list(messages) + [{"role": "assistant", "content": reply}]
 
-    updates = {
+    return {
         "last_reply": reply,
         "messages": updated_messages,
-        "concept_mastered": concept_mastered,
-        "phase": "memory_save" if concept_mastered else "learning",
+        "concept_mastered": ready_for_check,
+        "phase": "memory_save" if ready_for_check else "learning",
     }
 
-    return updates
 
+def _build_system_prompt(
+    state: TrekState,
+    concept: dict,
+    past_snapshots: list,
+    attempt_count: int
+) -> str:
+    topic = state.get("topic", "")
+    exit_condition = state.get("exit_condition", "")
+    knowledge_baseline = state.get("knowledge_baseline", {})
+    teaching_strategy = state.get("teaching_strategy", "gap_fill")
+    opening_prompt = state.get("opening_prompt", "")
 
-def _build_system_prompt(state: TrekState, concept_title: str, past_snapshots: list) -> str:
-    profile_context = f"""
-Learner profile:
-- Topic: {state.get('topic', '')}
-- Level: {state.get('level', '')}
-- Goal: {state.get('goal', '')}
-- Current concept: {concept_title}
-- Teaching strategy: {state.get('teaching_strategy', 'gap_fill')}
+    concept_context = f"""
+CURRENT CONCEPT:
+- Title: {concept.get('title', '')}
+- Description: {concept.get('description', '')}
+- Why this matters: {concept.get('why_needed', '')}
+- Complexity: {concept.get('complexity', 0.5)} (0=trivial, 1=extremely hard)
+- Teaching strategy: {teaching_strategy}
+
+LEARNER CONTEXT:
+- Learning goal: {topic} → {exit_condition}
+- Baseline: {knowledge_baseline.get('summary', 'unknown')}
+- Probe result: {knowledge_baseline.get('probe_result', 'unknown')}
+- Attempt number on this concept: {attempt_count + 1}
 """
 
     memory_context = ""
@@ -68,16 +89,40 @@ Learner profile:
         snap = past_snapshots[0]
         example = snap.get("example_used", "")
         analogy = snap.get("analogy_used", "")
-        strategy = snap.get("teaching_strategy", "")
         memory_context = f"""
-MEMORY — You previously taught this concept to this learner:
-- Example used: {example if example else "none"}
-- Analogy used: {analogy if analogy else "none"}
-- Strategy used: {strategy if strategy else "none"}
+MEMORY — Previously taught this concept:
+- Example used before: {example if example else "none"}
+- Analogy used before: {analogy if analogy else "none"}
 - Was mastered before: {snap.get('mastered', False)}
-
-IMPORTANT: Use the SAME example ({example}) for consistency if it was used before.
-Build on what was already taught. Do not restart from scratch.
+Keep using the same example/analogy for consistency.
 """
 
-    return TEACHER_SYSTEM + "\n\n" + profile_context + memory_context
+    strategy_instructions = {
+        "gap_fill": "The learner knows some of this. Find exactly what's missing and fill only that gap.",
+        "analogy_first": "Start with a strong concrete analogy before any technical explanation.",
+        "example_driven": "Lead with a real working example. Explain the concept through it.",
+        "definition_heavy": "Be precise and thorough. This learner needs depth and exactness.",
+    }.get(teaching_strategy, "Find the gap and fill it.")
+
+    opening_instruction = f"\nOPENING: Start with this question: {opening_prompt}" if opening_prompt and attempt_count == 0 else ""
+
+    mastery_instruction = """
+MASTERY SIGNAL:
+When the learner has demonstrated genuine understanding — they can explain the concept correctly in their own words, with correct reasoning — end your message with exactly: [READY_FOR_MASTERY_CHECK]
+Do NOT output this token unless their explanation was genuinely clean and correct.
+Do NOT output this on your first message.
+Do NOT output this if they just repeated keywords without understanding.
+"""
+
+    return (
+        TEACHER_SYSTEM
+        + "\n\n"
+        + concept_context
+        + "\n"
+        + strategy_instructions
+        + opening_instruction
+        + "\n"
+        + memory_context
+        + "\n"
+        + mastery_instruction
+    )

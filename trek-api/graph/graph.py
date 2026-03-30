@@ -1,7 +1,7 @@
 import os
 import json
 from langgraph.graph import StateGraph, START, END
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.memory import MemorySaver
 from graph.state import TrekState
 
 
@@ -145,7 +145,7 @@ def _after_mastery(state: TrekState) -> str:
 
 # ── Graph builder ─────────────────────────────────────────────────────────────
 
-def build_graph(checkpointer: AsyncPostgresSaver) -> StateGraph:
+def build_graph(checkpointer) -> StateGraph:
     graph = StateGraph(TrekState)
 
     # Register nodes
@@ -191,12 +191,5 @@ def build_graph(checkpointer: AsyncPostgresSaver) -> StateGraph:
     return graph.compile(checkpointer=checkpointer)
 
 
-async def get_checkpointer() -> AsyncPostgresSaver:
-    import psycopg
-    conn_str = os.environ["SUPABASE_DB_CONNECTION_STRING"]
-    conn = await psycopg.AsyncConnection.connect(
-        conn_str,
-        autocommit=True,
-        prepare_threshold=None,
-    )
-    return AsyncPostgresSaver(conn)
+async def get_checkpointer():
+    return MemorySaver()
