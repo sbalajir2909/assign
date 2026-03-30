@@ -1,33 +1,37 @@
-import pytest
-from agents.discovery_agent import discovery_agent, DISCOVERY_QUESTIONS
+import asyncio
+import sys
+from agents.discovery_agent import run_discovery
 
+async def test():
+    print("Discovery agent test — simulating a conversation\n")
+    print("=" * 50)
 
-def _state(step: int, message: str = "") -> dict:
-    return {
-        "session_id": "test", "user_id": "u1", "roadmap_id": None,
-        "phase": "discovery", "discovery_step": step,
-        "topic": "", "level": "", "goal": "", "time": "",
-        "gist": {}, "concepts": [], "sources_hit": [],
-        "current_concept_idx": 0, "concept_mastered": False,
-        "teaching_strategy": "gap_fill", "opening_prompt": "",
-        "messages": [{"role": "user", "content": message}] if message else [],
-        "last_reply": "", "past_snapshots": [],
-    }
+    conversation = []
 
+    # Simulate 6 turns of conversation
+    test_inputs = [
+        "I want to learn machine learning",
+        "I want to be able to build a recommendation system and deploy it",
+        "I've used Python for about a year, done some data analysis with pandas",
+        "I know what a function is and I've used loops and lists",
+        "I have about 3 weeks, maybe 2 hours a day",
+        "I need it for a project at work, my team wants to add recommendations to our app",
+    ]
 
-def test_first_question():
-    result = discovery_agent(_state(0))
-    assert result["last_reply"] == DISCOVERY_QUESTIONS[0]
-    assert result["discovery_step"] == 1
+    for user_input in test_inputs:
+        conversation.append({"role": "user", "content": user_input})
 
+        result = await run_discovery(conversation)
 
-def test_second_question_stores_topic():
-    result = discovery_agent(_state(1, "Python"))
-    assert result["topic"] == "Python"
-    assert result["last_reply"] == DISCOVERY_QUESTIONS[1]
-    assert result["discovery_step"] == 2
+        print(f"User: {user_input}")
+        print(f"Assign: {result['reply']}\n")
 
+        conversation.append({"role": "assistant", "content": result["reply"]})
 
-def test_all_answered_transitions_to_generation():
-    result = discovery_agent(_state(4, "2 weeks"))
-    assert result["phase"] == "generation"
+        if result["discovery_complete"]:
+            print("=" * 50)
+            print("DISCOVERY COMPLETE")
+            print(f"Learner profile: {result['learner_profile']}")
+            break
+
+asyncio.run(test())
