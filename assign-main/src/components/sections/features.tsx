@@ -6,7 +6,7 @@ import { motion, useInView } from "framer-motion";
 
 const features = [
   {
-    id: "built",
+    id: "build",
     num: "01",
     tag: "FOR BUILDERS",
     title: "Code like you have a senior dev on speed dial.",
@@ -112,19 +112,19 @@ const features = [
         <motion.div
           animate={{ rotateY: [0, 180, 180, 0, 0] }}
           transition={{ duration: 5, repeat: Infinity, ease: "easeInOut", times: [0, 0.3, 0.6, 0.9, 1] }}
-          className="w-full max-h-[110px] relative"
+          className="relative h-[140px] w-full"
           style={{ transformStyle: "preserve-3d", perspective: "800px" }}
         >
-          <div className="absolute inset-0 bg-background border-2 border-foreground brutalist-shadow flex flex-col items-center justify-center p-4" style={{ backfaceVisibility: "hidden" }}>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground mb-2">Question</span>
-            <span className="font-serif text-xl text-center">What is Mitosis?</span>
+          <div className="absolute inset-0 bg-background border-2 border-foreground brutalist-shadow flex flex-col items-center justify-center px-4 py-5" style={{ backfaceVisibility: "hidden" }}>
+            <span className="mb-3 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">Question</span>
+            <span className="max-w-[90%] text-center font-serif text-[clamp(1.9rem,3vw,2.4rem)] leading-[0.95]">What is Mitosis?</span>
           </div>
-          <div className="absolute inset-0 bg-foreground text-background border-2 border-foreground flex flex-col items-center justify-center p-4" style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-background/50 mb-2">Answer</span>
-            <span className="font-sans text-sm text-center leading-snug">Cell division producing two genetically identical daughter cells.</span>
+          <div className="absolute inset-0 bg-foreground text-background border-2 border-foreground flex flex-col items-center justify-center px-5 py-5" style={{ backfaceVisibility: "hidden", transform: "rotateY(180deg)" }}>
+            <span className="mb-3 font-mono text-[10px] uppercase tracking-widest text-background/50">Answer</span>
+            <span className="max-w-[92%] text-center font-sans text-base leading-tight sm:text-lg">Cell division producing two genetically identical daughter cells.</span>
           </div>
         </motion.div>
-        <div className="flex gap-3 mt-2">
+        <div className="mt-3 flex flex-wrap justify-center gap-3">
           <div className="border-2 border-foreground px-4 py-2 font-mono text-xs uppercase tracking-wider bg-red-100 text-red-700 brutalist-shadow-sm">Again</div>
           <div className="border-2 border-foreground px-4 py-2 font-mono text-xs uppercase tracking-wider bg-yellow-100 text-yellow-700 brutalist-shadow-sm">Hard</div>
           <div className="border-2 border-foreground px-4 py-2 font-mono text-xs uppercase tracking-wider bg-green-100 text-green-700 brutalist-shadow-sm">Got it ✓</div>
@@ -178,7 +178,7 @@ export function Features() {
 
               <Link href={feature.href}
                 className="flex items-center justify-between px-7 py-4 border-t-2 border-foreground bg-foreground text-background hover:bg-primary transition-colors duration-150">
-                <span className="font-mono text-xs font-bold uppercase tracking-widest">Try {feature.tag.split(" ").pop()} →</span>
+                <span className="font-mono text-xs font-bold uppercase tracking-widest">Try {feature.id} →</span>
                 <span className="font-mono text-[10px] text-background/50 uppercase tracking-widest">Live preview</span>
               </Link>
             </motion.div>
