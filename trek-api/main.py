@@ -1,5 +1,6 @@
 import os
 import uuid
+import base64
 from contextlib import asynccontextmanager
 from typing import List
 from dotenv import load_dotenv
@@ -19,6 +20,7 @@ from db.roadmaps import get_roadmap, update_roadmap_concepts
 from db.chat_history import get_messages
 from db.snapshots import get_snapshot
 from agents.visualizer_agent import run_visualizer
+from voice.service import VoiceService
 
 
 class ConceptsUpdate(BaseModel):
@@ -104,6 +106,16 @@ async def start_session(req: StartSessionRequest):
     }
 
     result = await _invoke(session_id, initial_state)
+
+    # After getting result from _invoke, before return:
+    audio_base64 = None
+    if result.get("last_reply"):
+        try:
+            voice_service = VoiceService()
+            audio_bytes = await voice_service.synthesize(result["last_reply"])
+            audio_base64 = base64.b64encode(audio_bytes).decode("utf-8")
+        except Exception:
+            audio_base64 = None  # graceful degradation, don't break the chat
 
     return StartSessionResponse(
         session_id=session_id,
@@ -248,6 +260,17 @@ async def fetch_history(roadmap_id: str, concept_id: int):
 async def update_concepts(roadmap_id: str, body: ConceptsUpdate):
     update_roadmap_concepts(roadmap_id, body.concepts)
     return {"ok": True}
+
+class TTSRequest(BaseModel):
+    text: str
+    session_id: str | None = None
+
+@app.post("/voice/tts")
+async def text_to_speech(req: TTSRequest):
+    voice_service = VoiceService()
+    audio_bytes = await voice_service.synthesize(req.text)
+    audio_b64 = base64.b64encode(audio_bytes).decode("utf-8")
+    return {"audio": audio_b64, "format": "wav"}
 
 
 @app.get("/health")
