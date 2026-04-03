@@ -65,6 +65,87 @@ function TrekPageInner() {
   const [visibleCount, setVisibleCount] = useState(15)
   const answerKeys: (keyof LearnerProfile)[] = ['topic', 'level', 'goal', 'time']
 
+  // ── TTS (Text-to-Speech) state ──────────────────────────────────────────
+  //
+  // voiceEnabled: whether the user has toggled voice ON (unmuted)
+  // isSpeaking: whether audio is currently playing (used to show a visual indicator)
+  // audioRef: a reference to the HTML Audio element that plays the speech
+  //
+  // HOW THIS WORKS:
+  // When voiceEnabled is true and the LLM sends a response, we call our
+  // /api/tts endpoint with the text. The endpoint returns MP3 audio bytes.
+  // We create a temporary URL for those bytes and play them through an
+  // Audio element. When the audio finishes, isSpeaking goes back to false.
+  //
+  const [voiceEnabled, setVoiceEnabled] = useState(false)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  const speakText = useCallback(async (text: string) => {
+    // Don't speak if voice is off, or if text is empty
+    if (!voiceEnabled || !text.trim()) return
+
+    // Stop any currently playing audio first
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+    }
+
+    try {
+      setIsSpeaking(true)
+
+      // Call our /api/tts proxy endpoint
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })
+
+      if (!res.ok) {
+        console.error('[TTS] Failed:', res.status)
+        setIsSpeaking(false)
+        return
+      }
+
+      // Convert the response bytes into a playable audio URL
+      // (This creates a temporary in-memory URL for the MP3 data)
+      const audioBlob = await res.blob()
+      const audioUrl = URL.createObjectURL(audioBlob)
+
+      // Create an Audio element and play it
+      const audio = new Audio(audioUrl)
+      audioRef.current = audio
+
+      audio.onended = () => {
+        setIsSpeaking(false)
+        URL.revokeObjectURL(audioUrl)  // Clean up the temporary URL
+        audioRef.current = null
+      }
+
+      audio.onerror = () => {
+        console.error('[TTS] Audio playback error')
+        setIsSpeaking(false)
+        URL.revokeObjectURL(audioUrl)
+        audioRef.current = null
+      }
+
+      await audio.play()
+    } catch (err) {
+      console.error('[TTS] Error:', err)
+      setIsSpeaking(false)
+    }
+  }, [voiceEnabled])
+
+  // Clean up audio when component unmounts or voice is toggled off
+  useEffect(() => {
+    if (!voiceEnabled && audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current = null
+      setIsSpeaking(false)
+    }
+  }, [voiceEnabled])
+  // ── End TTS state ───────────────────────────────────────────────────────
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages, loading])
 
   useEffect(() => {
@@ -203,6 +284,8 @@ function TrekPageInner() {
           const newMessages = [...updatedMessages, { role: 'assistant' as const, content: data.reply }]
           setMessages(newMessages)
           if (roadmapId) persistConversation(roadmapId, newMessages, currentConcept, concepts)
+          // ── TTS: Speak the reply if voice is enabled ──
+          speakText(data.reply)
         }
       } catch { setMessages([...updatedMessages, { role: 'assistant', content: "something went wrong, try again" }]) }
       finally { setLoading(false) }
@@ -400,7 +483,40 @@ function TrekPageInner() {
               {phase === 'learning' && concepts[currentConcept] && <span style={{ ...mono, fontSize: '11px', border: '1.5px solid var(--muted)', borderRadius: '4px', padding: '3px 8px', color: 'var(--muted-foreground)' }}>{concepts[currentConcept].title}</span>}
               {phase === 'gist' && <span style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)' }}>review course</span>}
             </div>
-            <div style={{ display: 'flex', gap: '12px' }}>
+            <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              {/* ── TTS Mute/Unmute Button ──
+                  This button toggles voice on/off. It only shows during the
+                  learning phase (not during discovery or gist review) since
+                  that's when the AI tutor is actively teaching.
+
+                  The button uses simple unicode characters for the icon:
+                  🔊 = unmuted (voice on), 🔇 = muted (voice off)
+
+                  isSpeaking adds a subtle pulsing border to indicate audio is playing.
+              */}
+              {phase === 'learning' && (
+                <button
+                  onClick={() => setVoiceEnabled(v => !v)}
+                  title={voiceEnabled ? 'Mute voice' : 'Unmute voice'}
+                  style={{
+                    ...mono,
+                    fontSize: '11px',
+                    border: `1.5px solid ${isSpeaking ? 'var(--foreground)' : 'var(--border)'}`,
+                    borderRadius: '4px',
+                    padding: '3px 8px',
+                    background: voiceEnabled ? 'var(--foreground)' : 'transparent',
+                    color: voiceEnabled ? 'var(--background)' : 'var(--muted-foreground)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  {voiceEnabled ? '🔊' : '🔇'}
+                  <span>{voiceEnabled ? 'voice on' : 'voice off'}</span>
+                </button>
+              )}
               <a href="/dashboard" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>dashboard</a>
               <a href="/" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>← home</a>
             </div>
