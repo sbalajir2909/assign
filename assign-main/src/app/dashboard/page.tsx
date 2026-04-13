@@ -5,6 +5,7 @@ export const dynamic = 'force-dynamic'
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
+import type { Topic } from '@/lib/types'
 
 interface Roadmap {
   id: string
@@ -19,7 +20,7 @@ interface Roadmap {
 }
 
 const MODES = [
-  { label: 'trek',   emoji: '🗺️', tagline: 'learn it end to end.',      desc: 'AI builds you a full course, teaches concept by concept using Socratic dialogue, and tracks your progress.', href: '/trek'   },
+  { label: 'trek',   emoji: '🗺️', tagline: 'learn it end to end.',      desc: 'Adaptive trek now runs through the B2C teaching loop with notes and progress tracking.',                         href: '/trek/new' },
   { label: 'spark',  emoji: '⚡',  tagline: 'stuck on one thing?',       desc: 'Drop in one topic. AI finds exactly what you don\'t know and fixes only that — fast.',                          href: '/spark'  },
   { label: 'recall', emoji: '🧠',  tagline: 'prove you know it.',        desc: 'Explain a topic from scratch. AI listens, then tells you exactly what broke down.',                              href: '/recall' },
   { label: 'build',  emoji: '🔨',  tagline: 'figure it out yourself.',   desc: 'Pair programmer that never writes code for you. It asks until you get there.',                                   href: '/build'  },
@@ -27,6 +28,7 @@ const MODES = [
 
 export default function Dashboard() {
   const [roadmaps, setRoadmaps] = useState<Roadmap[]>([])
+  const [topics, setTopics] = useState<Topic[]>([])
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<{ email: string; id: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -46,6 +48,17 @@ export default function Dashboard() {
       })
       const data = await res.json()
       setRoadmaps(data.roadmaps || [])
+
+      try {
+        const topicsRes = await fetch(`/api/b2c/topics/${session.user.id}`)
+        if (topicsRes.ok) {
+          const topicsData = await topicsRes.json()
+          setTopics(topicsData || [])
+        }
+      } catch (e) {
+        console.error('[dashboard topics]', e)
+      }
+
       setLoading(false)
     }
     load()
@@ -82,6 +95,12 @@ export default function Dashboard() {
           <span className="font-mono text-lg font-medium text-foreground tracking-tight">assign</span>
         </a>
         <div className="flex items-center gap-5">
+          <a href="/progress" className="font-mono text-xs text-muted-foreground no-underline hover:text-primary transition-colors">
+            progress
+          </a>
+          <a href="/notes" className="font-mono text-xs text-muted-foreground no-underline hover:text-primary transition-colors">
+            notes
+          </a>
           <span className="font-mono text-xs text-muted-foreground">{user?.email}</span>
           <button onClick={signOut} className="brutalist-shadow-hover font-mono text-xs border-2 border-foreground px-4 py-2 bg-background text-foreground cursor-pointer">
             sign out
@@ -115,11 +134,57 @@ export default function Dashboard() {
           </div>
         </section>
 
+        {topics.length > 0 && (
+          <section className="mb-16">
+            <div className="flex justify-between items-center mb-5">
+              <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">adaptive topics</p>
+              <a href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+                + start adaptive trek
+              </a>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {topics.map(topic => (
+                <div key={topic.id} className="brutalist-shadow bg-card border-2 border-foreground p-5">
+                  <div className="flex items-start justify-between gap-4 mb-4">
+                    <div className="min-w-0">
+                      <div className="font-mono font-bold text-base text-foreground tracking-tight mb-1">
+                        {topic.title}
+                      </div>
+                      <div className="font-mono text-xs text-muted-foreground">
+                        {topic.status} · {new Date(topic.created_at).toLocaleDateString()}
+                      </div>
+                    </div>
+                    <span className="font-mono text-[10px] uppercase tracking-wider border border-foreground px-2 py-1">
+                      b2c
+                    </span>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <a
+                      href={`/trek/${topic.id}`}
+                      className="font-mono text-xs text-foreground border-2 border-foreground px-3 py-2 bg-background no-underline hover:bg-muted transition-colors"
+                    >
+                      open →
+                    </a>
+                    <a
+                      href={`/progress?topic=${topic.id}`}
+                      className="font-mono text-xs text-muted-foreground border-2 border-muted px-3 py-2 bg-background no-underline hover:text-foreground transition-colors"
+                    >
+                      progress
+                    </a>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* Courses */}
         <section>
           <div className="flex justify-between items-center mb-5">
             <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">your trek courses</p>
-            <a href="/trek" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+            <a href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
               + new course
             </a>
           </div>
@@ -130,7 +195,7 @@ export default function Dashboard() {
           ) : roadmaps.length === 0 ? (
             <div className="py-16 px-6 text-center border-2 border-dashed border-muted">
               <p className="font-mono text-sm text-muted-foreground mb-6">no courses yet — start your first trek</p>
-              <a href="/trek" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
+              <a href="/trek/new" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
                 start trek →
               </a>
             </div>
