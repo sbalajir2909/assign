@@ -1,42 +1,50 @@
 import os
 import uuid
+import json
 from contextlib import asynccontextmanager
-from typing import List
+from typing import List, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from graph.graph import build_graph, get_checkpointer
-from graph.state import TrekState
-from models.schemas import (
-    StartSessionRequest, StartSessionResponse,
-    MessageRequest, MessageResponse,
-    RoadmapResponse, HistoryResponse,
-)
-from db.roadmaps import get_roadmap, update_roadmap_concepts
-from db.chat_history import get_messages
-from db.snapshots import get_snapshot
-from agents.visualizer_agent import run_visualizer
-
-
-class ConceptsUpdate(BaseModel):
-    concepts: List[dict]
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
-compiled_graph = None
+b2c_graph = None
+_b2c_pool = None  # postgres connection pool — closed on shutdown
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global compiled_graph
-    checkpointer = await get_checkpointer()
-    compiled_graph = build_graph(checkpointer)
+    global b2c_graph, _b2c_pool
+
+    conn_str = os.getenv("SUPABASE_DB_CONNECTION_STRING", "")
+    if conn_str:
+        try:
+            from graph.b2c_graph import build_b2c_graph
+            b2c_graph, _b2c_pool = await build_b2c_graph(conn_str)
+            print("[startup] B2C graph initialized (PostgresSaver)")
+        except Exception as e:
+            print(f"[startup] B2C graph init failed: {e}")
+
+    if not b2c_graph:
+        from graph.b2c_graph import build_b2c_graph_sync
+        b2c_graph = build_b2c_graph_sync()
+        print("[startup] B2C graph initialized (MemorySaver)")
+
     yield
 
-app = FastAPI(title="Trek API", version="2.0.0", lifespan=lifespan)
+    if _b2c_pool:
+        try:
+            await _b2c_pool.close()
+        except Exception:
+            pass
+
+
+app = FastAPI(title="Assign B2C API", version="3.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,209 +55,225 @@ app.add_middleware(
 )
 
 
-# ── Helper ────────────────────────────────────────────────────────────────────
+# ── B2C Endpoints ─────────────────────────────────────────────────────────────
 
-async def _invoke(session_id: str, state_patch: dict) -> TrekState:
-    config = {"configurable": {"thread_id": session_id}}
-    result = await compiled_graph.ainvoke(state_patch, config=config)
-    return result
+class B2CStartRequest(BaseModel):
+    user_id: str
+
+class B2CTrekMessage(BaseModel):
+    user_id: str
+    topic_id: str
+    session_id: str
+    message: str
+    phase: str  # current phase from frontend state
 
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@app.post("/trek/session", response_model=StartSessionResponse)
-async def start_session(req: StartSessionRequest):
-    """
-    Create a new Trek session.
-    Returns session_id and the first discovery question.
-    """
-    session_id = str(uuid.uuid4())
-
-    initial_state: dict = {
+def _b2c_initial_state(user_id: str, session_id: str) -> dict:
+    return {
+        "user_id": user_id,
+        "topic_id": "",
+        "topic_title": "",
         "session_id": session_id,
-        "user_id": req.user_id,
-        "roadmap_id": None,
         "phase": "discovery",
-
-        # Learner profile
-        "topic": "",
-        "exit_condition": "",
-        "knowledge_baseline": {},
-        "available_hours": 0.0,
-        "context": "",
+        "current_kc_index": 0,
+        "current_kc_id": None,
+        "kc_graph": [],
+        "total_kcs": 0,
+        "current_attempt_number": 1,
+        "max_attempts": 4,
+        "pass_threshold": 0.65,
+        "last_explanation": None,
+        "last_rubric_scores": None,
+        "last_weighted_score": None,
+        "last_passed": None,
+        "bkt_state": {},
+        "context_window": [],
+        "recent_turns": [],
+        "session_summary": None,
+        "flags_this_session": [],
+        "notes_generated": [],
+        "pending_message": None,
+        "stream_tokens": True,
         "discovery_messages": [],
-
-        # Course content
-        "gist": "",
-        "sprint_plan": {},
-        "validated_nodes": [],
-        "sources_hit": [],
-        "graph_confidence": "",
-        "evidence_strength": "",
-
-        # Progress
-        "current_concept_idx": 0,
-        "current_sprint_idx": 0,
-        "concept_mastered": False,
-        "concept_attempt_count": 0,
-        "flag_for_recall": [],
-        "teaching_strategy": "gap_fill",
-        "opening_prompt": "",
-        "last_mastery_result": {},
-
-        # Chat
-        "messages": [],
-        "last_reply": "",
-        "past_snapshots": [],
+        "discovery_complete": False,
+        "_discovery_profile": None,
     }
 
-    result = await _invoke(session_id, initial_state)
 
-    return StartSessionResponse(
-        session_id=session_id,
-        reply=result.get("last_reply", ""),
-        phase=result.get("phase", "discovery"),
+@app.post("/api/b2c/session")
+async def b2c_start_session(req: B2CStartRequest):
+    """Start a new B2C adaptive learning session."""
+    session_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": session_id}}
+
+    initial_state = _b2c_initial_state(req.user_id, session_id)
+    result = await b2c_graph.ainvoke(initial_state, config=config)
+
+    return {
+        "session_id": session_id,
+        "reply": result.get("pending_message", ""),
+        "phase": result.get("phase", "discovery"),
+    }
+
+
+@app.post("/api/b2c/message")
+async def b2c_message(body: B2CTrekMessage):
+    """
+    SSE endpoint — receives student message, runs the appropriate B2C agent, streams response.
+    """
+    config = {"configurable": {"thread_id": body.session_id}}
+
+    from utils.semantic_router import route_intent
+    from utils.model_router import get_llm_client
+
+    llm_client = get_llm_client()
+
+    async def generate():
+        try:
+            intent = await route_intent(body.message, body.phase, llm_client)
+
+            # ── Explanation submitted ────────────────────────────────────────
+            if intent == "explanation" and body.phase == "awaiting_explanation":
+                checkpoint = await b2c_graph.aget_state(config)
+                if not checkpoint or not checkpoint.values:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found'})}\n\n"
+                    return
+
+                state = dict(checkpoint.values)
+
+                updated_state = {
+                    **state,
+                    "last_explanation": body.message,
+                    "phase": "validating",
+                }
+                recent = list(state.get("recent_turns", []))
+                recent.append({"role": "user", "content": body.message})
+                updated_state["recent_turns"] = recent[-6:]
+
+                await b2c_graph.aupdate_state(config, updated_state)
+
+                from agents.mastery_validator import validate_explanation
+                patch, scores, flag_type = await validate_explanation(updated_state, llm_client)
+                await b2c_graph.aupdate_state(config, patch)
+
+                yield f"data: {json.dumps({'type': 'validation_result', 'passed': patch.get('last_passed', False), 'score': round(patch.get('last_weighted_score', 0.0), 2), 'feedback': scores.get('feedback', ''), 'what_was_right': scores.get('what_was_right', ''), 'what_was_wrong': scores.get('what_was_wrong', ''), 'flag_type': flag_type, 'attempt_number': state.get('current_attempt_number', 1), 'next_phase': patch.get('phase', 'teaching')})}\n\n"
+
+                if patch.get("phase") in ("notes_generation", "teaching"):
+                    result = await b2c_graph.ainvoke(None, config=config)
+                    if result.get("pending_message"):
+                        yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', 'awaiting_explanation')})}\n\n"
+
+                    if result.get("kc_graph"):
+                        kc_summary = [
+                            {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": result.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index}
+                            for kc in result["kc_graph"]
+                        ]
+                        yield f"data: {json.dumps({'type': 'kc_graph', 'kc_graph': kc_summary})}\n\n"
+
+            # ── Discovery / other phases ─────────────────────────────────────
+            else:
+                checkpoint = await b2c_graph.aget_state(config)
+                if not checkpoint or not checkpoint.values:
+                    yield f"data: {json.dumps({'type': 'error', 'message': 'Session not found'})}\n\n"
+                    return
+
+                state = dict(checkpoint.values)
+                phase = state.get("phase", "discovery")
+                patch: dict = {}
+
+                if phase == "discovery":
+                    disc_msgs = list(state.get("discovery_messages", []))
+                    disc_msgs.append({"role": "user", "content": body.message})
+                    patch["discovery_messages"] = disc_msgs
+                else:
+                    recent = list(state.get("recent_turns", []))
+                    recent.append({"role": "user", "content": body.message})
+                    patch["recent_turns"] = recent[-6:]
+
+                await b2c_graph.aupdate_state(config, patch)
+                result = await b2c_graph.ainvoke(None, config=config)
+
+                if result.get("pending_message"):
+                    yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', phase)})}\n\n"
+
+                if result.get("kc_graph"):
+                    kc_summary = [
+                        {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": result.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index}
+                        for kc in result["kc_graph"]
+                    ]
+                    yield f"data: {json.dumps({'type': 'curriculum_ready', 'topic_id': result.get('topic_id', ''), 'topic_title': result.get('topic_title', ''), 'kc_graph': kc_summary})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
-@app.post("/trek/message", response_model=MessageResponse)
-async def send_message(req: MessageRequest):
-    """
-    Send a user message.
-    Routes automatically to the correct agent based on current phase.
-    """
-    config = {"configurable": {"thread_id": req.session_id}}
+@app.get("/api/b2c/notes/{user_id}")
+async def b2c_get_notes(user_id: str):
+    from db.client import supabase
+    try:
+        result = await supabase.table("kc_notes").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    # Load current state
-    checkpoint = await compiled_graph.aget_state(config)
+
+@app.get("/api/b2c/progress/{user_id}/{topic_id}")
+async def b2c_get_progress(user_id: str, topic_id: str):
+    from db.client import supabase
+    try:
+        result = await supabase.table("student_kc_state").select("*").eq("user_id", user_id).eq("topic_id", topic_id).execute()
+        return result.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/b2c/topics/{user_id}")
+async def b2c_get_topics(user_id: str):
+    from db.client import supabase
+    try:
+        result = await supabase.table("topics").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
+        return result.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/b2c/state/{session_id}")
+async def b2c_get_state(session_id: str):
+    config = {"configurable": {"thread_id": session_id}}
+    checkpoint = await b2c_graph.aget_state(config)
     if not checkpoint or not checkpoint.values:
-        raise HTTPException(
-            status_code=404,
-            detail="Session not found. Start a new session first."
-        )
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    current = checkpoint.values
-    phase = current.get("phase", "discovery")
-
-    # Build state patch
-    patch: dict = {}
-
-    if req.roadmap_id:
-        patch["roadmap_id"] = req.roadmap_id
-
-    # ── Discovery phase ───────────────────────────────────────────────────────
-    if phase == "discovery":
-        discovery_messages = list(current.get("discovery_messages", []))
-        discovery_messages.append({"role": "user", "content": req.message})
-        patch["discovery_messages"] = discovery_messages
-
-    elif phase == "generation":
-        patch["phase"] = "generation"
-
-    # ── Gist phase — user approves or edits ───────────────────────────────────
-    elif phase == "gist":
-        approval_words = ("approve", "start", "yes", "go", "looks good",
-                          "let's go", "lets go", "perfect", "good")
-        if any(w in req.message.lower() for w in approval_words):
-            patch["phase"] = "planning"
-            patch["current_concept_idx"] = 0
-            patch["current_sprint_idx"] = 0
-            patch["concept_attempt_count"] = 0
-            patch["messages"] = []
-        else:
-            # User is asking a question or requesting changes
-            discovery_messages = list(current.get("discovery_messages", []))
-            discovery_messages.append({"role": "user", "content": req.message})
-            patch["discovery_messages"] = discovery_messages
-
-    # ── Learning phase ────────────────────────────────────────────────────────
-    elif phase in ("planning", "memory_load", "learning", "mastery_check", "memory_save"):
-        updated_messages = list(current.get("messages", [])) + [
-            {"role": "user", "content": req.message}
+    state = checkpoint.values
+    kc_graph_summary = []
+    if state.get("kc_graph"):
+        kc_graph_summary = [
+            {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": state.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index, "flag_type": kc.flag_type}
+            for kc in state["kc_graph"]
         ]
-        patch["messages"] = updated_messages
-        patch["phase"] = "learning"
 
-    result = await _invoke(req.session_id, patch)
-
-    # ── Visualizer — fire after teaching responses ─────────────────────────────
-    visual = None
-    result_phase = result.get("phase", phase)
-
-    if result_phase == "learning":
-        validated_nodes = result.get("validated_nodes", [])
-        current_idx = result.get("current_concept_idx", 0)
-        concept = (
-            validated_nodes[current_idx]
-            if current_idx < len(validated_nodes)
-            else {}
-        )
-        if concept:
-            try:
-                visual_result = await run_visualizer(
-                    concept=concept,
-                    conversation=result.get("messages", []),
-                )
-                if visual_result.get("should_visualize"):
-                    visual = {
-                        "type": visual_result["visual_type"],
-                        "subtype": visual_result["visual_subtype"],
-                        "code": visual_result["code"],
-                        "confidence": visual_result["confidence"],
-                    }
-            except Exception:
-                visual = None
-
-    return MessageResponse(
-        reply=result.get("last_reply", ""),
-        phase=result_phase,
-        roadmap_id=result.get("roadmap_id"),
-        gist=result.get("gist"),
-        sprint_plan=result.get("sprint_plan"),
-        sources_hit=result.get("sources_hit"),
-        concept_mastered=result.get("concept_mastered", False),
-        current_concept_idx=result.get("current_concept_idx"),
-        current_sprint_idx=result.get("current_sprint_idx"),
-        opening_prompt=result.get("opening_prompt"),
-        visual=visual,
-        flag_for_recall=result.get("flag_for_recall"),
-        graph_confidence=result.get("graph_confidence"),
-        evidence_strength=result.get("evidence_strength"),
-    )
-
-
-@app.get("/trek/roadmap/{roadmap_id}", response_model=RoadmapResponse)
-async def fetch_roadmap(roadmap_id: str):
-    data = get_roadmap(roadmap_id)
-    if not data:
-        raise HTTPException(status_code=404, detail="Roadmap not found")
-    return RoadmapResponse(
-        id=data["id"],
-        topic=data["topic"],
-        gist=data.get("gist", ""),
-        sprint_plan=data.get("sprint_plan", {}),
-        sources_hit=data.get("sources_hit", []),
-        created_at=data["created_at"],
-    )
-
-
-@app.get("/trek/history/{roadmap_id}/concept/{concept_id}",
-         response_model=HistoryResponse)
-async def fetch_history(roadmap_id: str, concept_id: int):
-    messages = get_messages(roadmap_id, concept_id)
-    roadmap = get_roadmap(roadmap_id)
-    snapshot = None
-    if roadmap:
-        snapshot = get_snapshot(roadmap["user_id"], concept_id)
-    return HistoryResponse(messages=messages, snapshot=snapshot)
-
-
-@app.put("/trek/roadmap/{roadmap_id}/concepts")
-async def update_concepts(roadmap_id: str, body: ConceptsUpdate):
-    update_roadmap_concepts(roadmap_id, body.concepts)
-    return {"ok": True}
+    return {
+        "phase": state.get("phase"),
+        "topic_id": state.get("topic_id"),
+        "topic_title": state.get("topic_title"),
+        "current_kc_index": state.get("current_kc_index", 0),
+        "total_kcs": state.get("total_kcs", 0),
+        "kc_graph": kc_graph_summary,
+        "notes_generated": state.get("notes_generated", []),
+        "flags_this_session": state.get("flags_this_session", []),
+    }
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "2.0.0"}
+    return {"status": "ok", "version": "3.0.0"}
