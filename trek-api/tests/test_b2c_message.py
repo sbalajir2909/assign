@@ -82,3 +82,46 @@ async def test_b2c_message_appends_discovery_message_before_graph_run(monkeypatc
         )
     ]
     assert "Why do you want to learn Python?" in stream
+
+
+@pytest.mark.asyncio
+async def test_b2c_message_allows_curriculum_build_without_current_kc(monkeypatch):
+    state = {
+        "phase": "curriculum_build",
+        "user_id": "user-1",
+        "topic_id": "topic-1",
+        "recent_turns": [],
+    }
+    result = {
+        "pending_message": "Here's your first concept.",
+        "phase": "awaiting_explanation",
+        "kc_graph": [],
+    }
+    fake_graph = FakeGraph(state=state, result=result)
+
+    async def fake_route_intent(message, phase, llm_client):
+        return "other"
+
+    monkeypatch.setattr(main, "b2c_graph", fake_graph)
+    monkeypatch.setattr("utils.semantic_router.route_intent", fake_route_intent)
+    monkeypatch.setattr("utils.model_router.get_llm_client", lambda: object())
+
+    response = await main.b2c_message(
+        B2CTrekMessage(
+            user_id="user-1",
+            topic_id="topic-1",
+            session_id="session-1",
+            message="let's learn",
+            phase="curriculum_build",
+        )
+    )
+    stream = await _read_stream(response)
+
+    assert fake_graph.updated == []
+    assert fake_graph.invoked == [
+        (
+            {"configurable": {"thread_id": "session-1"}},
+            {},
+        )
+    ]
+    assert "Here's your first concept." in stream

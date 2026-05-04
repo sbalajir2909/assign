@@ -775,17 +775,23 @@ async def b2c_message(body: B2CTrekMessage):
                     disc_msgs.append({"role": "user", "content": body.message})
                     patch["discovery_messages"] = disc_msgs
                     await b2c_graph.aupdate_state(config, patch)
-                else:
+                elif phase in ("teaching", "awaiting_explanation", "notes_generation"):
                     recent = list(state.get("recent_turns", []))
                     recent.append({"role": "user", "content": body.message})
                     patch["recent_turns"] = recent[-6:]
-                    await _persist_b2c_chat_turn(
-                        state["user_id"],
-                        state["topic_id"],
-                        state["current_kc_id"],
-                        "user",
-                        body.message,
-                    )
+                    if state.get("current_kc_id") and state.get("topic_id"):
+                        await _persist_b2c_chat_turn(
+                            state["user_id"],
+                            state["topic_id"],
+                            state["current_kc_id"],
+                            "user",
+                            body.message,
+                        )
+                else:
+                    # curriculum_build and other pre-KC phases can be advanced by
+                    # a user nudge ("let's learn") but do not yet have a KC to
+                    # attach chat-history turns to.
+                    patch = {}
 
                 # For discovery, persist the appended user turn, but also pass
                 # it into ainvoke so this run sees it even with PostgresSaver.
