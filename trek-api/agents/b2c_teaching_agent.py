@@ -8,20 +8,39 @@ Teaching must be adaptive — if the student failed a previous attempt, teach di
 
 from utils.model_router import get_model_name
 
-TEACHING_SYSTEM_PROMPT = """You are Assign, an adaptive learning tutor.
-Your job is to teach one specific concept clearly, then ask the student to explain it back.
+TEACHING_SYSTEM_PROMPT = """You are Assign, an adaptive tutor. Your behavior is strictly governed by which attempt this is.
 
-Rules you must follow:
-1. Teach the concept in 3-5 sentences. Be concrete. Use one analogy if helpful.
-2. ALWAYS end with: "Now, explain [concept] back to me in your own words."
-3. If this is attempt 2 or higher (re-attempt after failing), change your approach entirely.
-   Use a different analogy. Simplify. Focus only on what they got wrong.
-4. Never lecture for more than 150 words.
-5. Never ask multiple questions. One ask only: explain it back.
-6. If flag_type is 'misconception', explicitly address the misconception first before re-teaching.
+━━━ ATTEMPT 1 — first time teaching this concept ━━━
+• Start with ONE short question to probe what the student already knows.
+  e.g. "Before I explain, what do you already know about [concept]?"
+• Keep the initial explanation to 2–3 sentences max. One analogy if it helps.
+• Total response must be under 60 words.
+• End with: "Now explain [concept] back to me in your own words."
 
-You have context about this student: what they've learned, what they've struggled with,
-what analogies worked for them before. Use it.
+━━━ ATTEMPT 2 — student got a partial score ━━━
+• Address ONLY the one specific gap identified in the validator feedback.
+• Use a COMPLETELY DIFFERENT analogy or example than anything already in the chat history.
+• Do NOT re-explain the full concept — only the gap.
+• Under 80 words total.
+• End with a targeted question that directly tests the gap, not a generic "explain it back."
+
+━━━ ATTEMPT 3 ━━━
+• Go concrete: give a specific code example, real-world scenario, or step-by-step breakdown.
+• Ask a narrow, targeted question that only works if they understand the gap.
+• Under 80 words.
+
+━━━ ATTEMPT 4 — final attempt ━━━
+• Be direct. State the specific missing piece in exactly one sentence.
+• Then ask them to explain just that one thing back.
+• Under 60 words.
+
+━━━ ALWAYS ━━━
+• Never use the same analogy twice in a session. Scan the conversation history
+  for any analogy already used and explicitly choose something different.
+• Never re-explain the full concept after attempt 1 — only address the gap.
+• Never ask multiple questions. One ask per response, always.
+• If flag_type is 'misconception': correct the specific misconception in one sentence first,
+  then proceed with the attempt rules above.
 """
 
 
@@ -33,16 +52,18 @@ async def run_teaching(state: dict, client) -> dict:
     kc = next(k for k in state["kc_graph"] if k.id == state["current_kc_id"])
     attempt = state.get("current_attempt_number", 1)
 
-    # Build re-attempt context if needed
+    # Build re-attempt context if needed.
+    # Note: score keys match the 3-dimension rubric (core_accuracy, own_words, depth).
     reattempt_context = ""
     if attempt > 1 and state.get("last_rubric_scores"):
         scores = state["last_rubric_scores"]
+        gap = scores.get("what_was_wrong", "").strip()
+        right = scores.get("what_was_right", "").strip()
         reattempt_context = (
-            f"\nThis is attempt {attempt}. The student previously scored:\n"
-            f"- Core idea: {scores.get('core_idea', 0):.0%}\n"
-            f"- Reasoning: {scores.get('reasoning_quality', 0):.0%}\n"
-            f"What was wrong: {scores.get('what_was_wrong', 'unclear')}\n"
-            f"Adjust your teaching to address this specifically."
+            f"\nThis is attempt {attempt} of 4."
+            f"\nWhat the student got right: {right or 'partially understood the concept'}"
+            f"\nThe specific gap to address: {gap or 'unclear — use a different framing'}"
+            f"\nAddress ONLY this gap. Do not re-explain the full concept."
         )
 
     # Check for active misconception flag
@@ -71,17 +92,30 @@ async def run_teaching(state: dict, client) -> dict:
         )}]
         print(f"[teaching_agent] Injecting {len(prior_moments)} RAG chunk(s) into prompt")
 
+    # Per-attempt task instruction — tells the LLM exactly what to produce.
+    if attempt == 1:
+        task_instruction = (
+            f"Concept: {kc.title}\n"
+            f"Description: {kc.description}\n"
+            f"{misconception_note}\n\n"
+            "This is the student's first time seeing this concept. "
+            "Follow the ATTEMPT 1 rules: probe question first, brief explanation, under 60 words."
+        )
+    else:
+        task_instruction = (
+            f"Concept: {kc.title}\n"
+            f"{reattempt_context}"
+            f"{misconception_note}\n\n"
+            f"Follow the ATTEMPT {attempt} rules. "
+            "Address only the gap. Do not re-explain the full concept. "
+            "Choose an analogy not yet used in this conversation."
+        )
+
     messages = [
         *retrieved_system,
         {"role": "system", "content": TEACHING_SYSTEM_PROMPT},
         *state.get("context_window", []),
-        {"role": "user", "content": (
-            f"Current concept to teach: {kc.title}\n"
-            f"Description: {kc.description}\n"
-            f"{reattempt_context}"
-            f"{misconception_note}\n\n"
-            f"Teach this concept now."
-        )}
+        {"role": "user", "content": task_instruction},
     ]
 
     response = await client.chat.completions.create(
