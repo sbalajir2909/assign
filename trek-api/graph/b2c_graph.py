@@ -83,7 +83,11 @@ async def build_b2c_graph(conn_string: str):
     pool = AsyncConnectionPool(
         conninfo=conn_string,
         max_size=5,
-        kwargs={"autocommit": True, "prepare_threshold": 0},
+        kwargs={
+            "autocommit": True,
+            "prepare_threshold": None,
+            "options": "-c default_transaction_isolation=serializable",
+        },
         open=False,
     )
     await pool.open()
