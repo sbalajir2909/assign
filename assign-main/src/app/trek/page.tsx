@@ -6,7 +6,7 @@ import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 
-interface Message { role: 'assistant' | 'user'; content: string }
+interface Message { role: 'assistant' | 'user'; content: string; is_consolidation?: boolean }
 interface SprintConcept {
   id: string; title: string; description: string; why_needed: string
   complexity: number; estimated_hours: number; prerequisites: string[]
@@ -315,6 +315,9 @@ function TrekPageInner() {
                   }
                 })
               }
+
+            } else if (evt.type === 'consolidation') {
+              setMessages(prev => [...prev, { role: 'assistant', content: evt.content, is_consolidation: true }])
 
             } else if (evt.type === 'validation_result') {
               if (evt.next_phase) setBackendPhase(evt.next_phase)
@@ -628,8 +631,11 @@ function TrekPageInner() {
             )}
 
             {!showUploadZone && messages.map((m, i) => (
-              <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                <div style={{ maxWidth: '78%', padding: '12px 16px', fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', borderRadius: '4px', border: '2px solid var(--border)', ...shadowSm, ...(m.role === 'user' ? { background: 'var(--foreground)', color: 'var(--background)' } : { background: 'var(--card)', color: 'var(--foreground)' }) }}>
+              <div key={i} style={{ display: 'flex', flexDirection: m.is_consolidation ? 'column' : 'row', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start', alignItems: m.is_consolidation ? 'flex-start' : undefined }}>
+                {m.is_consolidation && (
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10px', letterSpacing: '0.08em', textTransform: 'uppercase' as const, color: 'var(--muted-foreground)', marginBottom: '4px' }}>concept locked in</span>
+                )}
+                <div style={{ maxWidth: '78%', padding: '12px 16px', fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', border: '2px solid var(--border)', borderLeft: m.is_consolidation ? '3px solid var(--border)' : '2px solid var(--border)', ...shadowSm, ...(m.role === 'user' ? { background: 'var(--foreground)', color: 'var(--background)' } : { background: 'var(--card)', color: 'var(--foreground)' }) }}>
                   {m.content}
                 </div>
               </div>

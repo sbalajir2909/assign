@@ -359,6 +359,16 @@ async def b2c_message(body: B2CTrekMessage):
 
                 yield f"data: {json.dumps({'type': 'validation_result', 'passed': patch.get('last_passed', False), 'score': round(patch.get('last_weighted_score', 0.0), 2), 'feedback': scores.get('feedback', ''), 'what_was_right': scores.get('what_was_right', ''), 'what_was_wrong': scores.get('what_was_wrong', ''), 'flag_type': flag_type, 'attempt_number': state.get('current_attempt_number', 1), 'next_phase': patch.get('phase', 'teaching')})}\n\n"
 
+                # Consolidation message — highest retention leverage point.
+                # Only when the student actually passed (mastery or force-advance).
+                if patch.get("last_passed"):
+                    from agents.consolidation_agent import generate_consolidation
+                    try:
+                        consolidation = await generate_consolidation(updated_state, llm_client)
+                        yield f"data: {json.dumps({'type': 'consolidation', 'content': consolidation})}\n\n"
+                    except Exception as e:
+                        print(f"[consolidation] Failed to generate: {e}")
+
                 if patch.get("phase") in ("notes_generation", "teaching"):
                     result = await b2c_graph.ainvoke(None, config=config)
                     if result.get("pending_message"):
