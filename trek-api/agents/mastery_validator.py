@@ -12,13 +12,12 @@ BKT signal:
 - Defaults: p_l0=0.1, p_transit=0.10, p_slip=0.10, p_guess=0.20.
 
 Rubric weights (sum to 1.0):
-- core_idea:        0.40
-- reasoning_quality: 0.30
-- own_words:         0.20
-- edge_awareness:    0.10
+- core_accuracy: 0.50  (concept fundamentally correct?)
+- own_words:     0.30  (explained in their own framing?)
+- depth:         0.20  (shows WHY, not just WHAT?)
 
 Flag rules:
-- score_core_idea < 0.30 on ANY attempt → flag='misconception' immediately
+- core_accuracy < 0.30 on ANY attempt → flag='misconception' immediately
 - 4 attempts without mastery → flag='struggling' (force advance on attempt 4)
 - attempt 1 weighted_score >= 0.85 → flag='strong'
 """
@@ -30,24 +29,58 @@ from utils.bkt import update_bkt
 from utils.interaction_logger import log_interaction
 from db.client import supabase
 
-VALIDATOR_SYSTEM_PROMPT = """You are an expert educational assessor for the Assign learning platform.
+VALIDATOR_SYSTEM_PROMPT = """You are evaluating whether a student genuinely understands a concept.
 
-Your job is to score a student's explanation of a concept using a strict 4-dimension rubric.
-Be honest. Do not inflate scores. A student who just echoes back the teaching word-for-word
-should score LOW on own_words. A student who gets the central concept wrong should score
-VERY LOW on core_idea — this is a misconception, not a gap.
+PRIMARY QUESTION: Could this student explain this concept to a friend who had never heard of it?
+If yes — even if imprecisely worded — that is mastery.
 
-You MUST return valid JSON and nothing else. No preamble. No markdown. No explanation.
+Score on THREE dimensions. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON.
 
-JSON format:
+━━━ RUBRIC ━━━
+
+1. core_accuracy  (weight 0.50)
+   The student's core idea — is it fundamentally correct?
+   • Correct concept in informal language → HIGH score (0.75+)
+   • Missing technical terms is NOT a penalty if the idea is right
+   • Low scores (< 0.40) only for factual errors or fundamental misunderstandings
+   • Do NOT penalize for omitting edge cases, especially on attempts 1 or 2
+
+2. own_words  (weight 0.30)
+   Did they explain it with their own framing and examples?
+   • Verbatim repetition of the teaching text → LOW (< 0.40)
+   • Personal paraphrase or personal example → HIGH (0.75+)
+   • Partial paraphrase with one original thought → MEDIUM (0.50–0.70)
+
+3. depth  (weight 0.20)
+   Do they show WHY it works, not just WHAT it is?
+   • One correct "why" or causal reasoning → HIGH (0.75+)
+   • Description of behavior only, no reasoning → LOW (0.30–0.50)
+   • Do not require exhaustive explanations — one good reason is enough
+
+━━━ FEEDBACK RULES (non-negotiable) ━━━
+
+what_was_right:
+  ALWAYS specific and genuine. Quote or paraphrase what they actually said that was correct.
+  Never write "good attempt", "nice try", or anything generic. Never leave this empty.
+
+If weighted score >= 0.65 (passed):
+  feedback = "[one sentence naming what they explained well] + [one growth pointer —
+  something interesting to explore deeper, framed as curiosity not correction]"
+  what_was_wrong = "" (empty — they passed)
+
+If weighted score < 0.65 (not yet):
+  feedback = "[acknowledge the ONE most correct thing they said] + [identify ONE specific
+  gap — not a list, just the most important thing missing]"
+  what_was_wrong = one specific gap only
+
+━━━ JSON FORMAT ━━━
 {
-  "core_idea": <float 0.0-1.0>,
-  "reasoning_quality": <float 0.0-1.0>,
+  "core_accuracy": <float 0.0-1.0>,
   "own_words": <float 0.0-1.0>,
-  "edge_awareness": <float 0.0-1.0>,
-  "feedback": "<one sentence of honest feedback to show the student>",
-  "what_was_right": "<one sentence — what did they get correct? Be specific.>",
-  "what_was_wrong": "<one sentence — what was missing or incorrect? Be specific. Empty string if nothing.>"
+  "depth": <float 0.0-1.0>,
+  "feedback": "<feedback following the rules above>",
+  "what_was_right": "<specific and genuine — never empty>",
+  "what_was_wrong": "<one specific gap, or empty string if passed>"
 }"""
 
 # Kept for documentation and test compatibility — describes the rubric thresholds
@@ -55,10 +88,9 @@ JSON format:
 ATTEMPT_THRESHOLDS = {1: 0.65, 2: 0.65, 3: 0.50, 4: None}  # None = force advance
 
 RUBRIC_WEIGHTS = {
-    "core_idea": 0.40,
-    "reasoning_quality": 0.30,
-    "own_words": 0.20,
-    "edge_awareness": 0.10,
+    "core_accuracy": 0.50,
+    "own_words": 0.30,
+    "depth": 0.20,
 }
 
 BKT_MASTERY_THRESHOLD = 0.75   # P(L) gate for KC advancement
@@ -173,10 +205,10 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
     except json.JSONDecodeError:
         print(f"[mastery_validator] JSON parse failed. Raw: {raw[:200]}")
         scores = {
-            "core_idea": 0.0, "reasoning_quality": 0.0,
-            "own_words": 0.0, "edge_awareness": 0.0,
+            "core_accuracy": 0.0, "own_words": 0.0, "depth": 0.0,
             "feedback": "I had trouble reading your explanation. Please try again.",
-            "what_was_right": "", "what_was_wrong": ""
+            "what_was_right": "You made an attempt to explain the concept.",
+            "what_was_wrong": "I couldn't parse your response — please try again.",
         }
 
     weighted = sum(scores.get(k, 0.0) * RUBRIC_WEIGHTS[k] for k in RUBRIC_WEIGHTS)
@@ -208,7 +240,7 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
     flag_type = None
     flag_reason = None
 
-    if scores.get("core_idea", 1.0) < 0.30:
+    if scores.get("core_accuracy", 1.0) < 0.30:
         flag_type = "misconception"
         flag_reason = (
             f"Core concept misunderstood on attempt {attempt_num}. "
