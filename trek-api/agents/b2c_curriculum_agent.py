@@ -1,6 +1,13 @@
 """
 B2C Curriculum agent — wraps the existing curriculum pipeline.
 Converts validated_nodes → KCNode objects and persists to Supabase.
+
+Profile mapping:
+  prior_knowledge  → knowledge_baseline (passed to build_graph)
+  goal_type        → exit_condition (shapes KC graph focus)
+  weeks_available  → available_hours = weeks × 3 (3 hrs/week default pace)
+  prior_knowledge  → pre-known KCs placed first in kc_graph as already-mastered,
+                     teaching starts at first new KC
 """
 
 import uuid
@@ -10,25 +17,129 @@ from db.client import supabase
 from db.roadmaps import save_roadmap
 
 
+# ── Pre-known KC detection ────────────────────────────────────────────────────
+
+_STOP_WORDS = {
+    'and', 'or', 'the', 'a', 'an', 'in', 'of', 'to', 'is', 'for',
+    'with', 'on', 'at', 'from', 'by', 'as', 'its', 'it', 'be', 'are',
+}
+
+
+def _is_pre_known(title: str, prior_knowledge: list[str]) -> bool:
+    """
+    Returns True if a KC title meaningfully overlaps with the student's
+    stated prior knowledge.  Uses word-level overlap + substring matching.
+    Intentionally conservative — only flags clear matches to avoid
+    incorrectly skipping KCs the student doesn't actually know.
+    """
+    if not prior_knowledge:
+        return False
+    title_lower = title.lower()
+    title_words = set(title_lower.split()) - _STOP_WORDS
+    if not title_words:
+        return False
+    for item in prior_knowledge:
+        item_lower = item.lower().strip()
+        if not item_lower:
+            continue
+        # Direct substring: "lists" in "Python lists" or "Python lists" in "lists"
+        if item_lower in title_lower or title_lower in item_lower:
+            return True
+        # Word-level overlap ignoring stop words
+        item_words = set(item_lower.split()) - _STOP_WORDS
+        if item_words and (title_words & item_words):
+            return True
+    return False
+
+
+# ── Profile → curriculum pipeline mapping ────────────────────────────────────
+
+_GOAL_EXIT_CONDITIONS = {
+    "exam": (
+        "Pass the {topic} exam — prioritize breadth and recall. "
+        "Weight toward concepts most likely to appear on tests. "
+        "Include revision and recall practice. Goal: {detail}"
+    ),
+    "project": (
+        "Build a project using {topic} — prioritize applied, practical KCs. "
+        "End with a synthesis KC that ties the project together. Goal: {detail}"
+    ),
+    "deep_understanding": (
+        "Deep understanding of {topic} — include theory, internals, and edge cases. "
+        "Do not sacrifice depth for breadth. Goal: {detail}"
+    ),
+    "job": (
+        "Get a job using {topic} — focus on practical skills and common interview topics. "
+        "Include real-world patterns and common pitfalls. Goal: {detail}"
+    ),
+    "other": "{detail}",
+}
+
+
+def _build_curriculum_profile(raw_profile: dict) -> dict:
+    """Maps the discovery profile to the shape run_curriculum() expects."""
+    topic = raw_profile["topic"]
+    goal_type = raw_profile.get("goal_type", "other")
+    goal_detail = raw_profile.get("goal_detail", f"understand {topic} end to end")
+    prior_knowledge = raw_profile.get("prior_knowledge", [])
+    weeks_available = int(raw_profile.get("weeks_available", 4) or 4)
+
+    # Exit condition encodes goal shape for the graph builder
+    exit_template = _GOAL_EXIT_CONDITIONS.get(goal_type, _GOAL_EXIT_CONDITIONS["other"])
+    exit_condition = exit_template.format(topic=topic, detail=goal_detail)
+
+    # Knowledge baseline — tells graph builder what to skip or fast-track
+    if prior_knowledge:
+        summary = (
+            "Student already knows: " + ", ".join(prior_knowledge) + ". "
+            "Skip or fast-track these topics in the curriculum."
+        )
+        probe_result = "strong" if len(prior_knowledge) >= 4 else "partial"
+        probed_concept = prior_knowledge[0]
+    else:
+        summary = "Complete beginner — no prior knowledge of this topic."
+        probe_result = "none"
+        probed_concept = ""
+
+    return {
+        "topic": topic,
+        "exit_condition": exit_condition,
+        "knowledge_baseline": {
+            "summary": summary,
+            "probed_concept": probed_concept,
+            "probe_result": probe_result,
+        },
+        "available_hours": float(weeks_available * 3),  # 3 hrs/week default pace
+    }
+
+
+# ── Main agent ────────────────────────────────────────────────────────────────
+
 async def run_b2c_curriculum(state: dict) -> dict:
     """
     Builds the KC graph from the learner profile.
     Persists knowledge_components and student_kc_state rows.
     Returns state patch.
     """
-    profile = state.get("_discovery_profile") or {
-        "topic": state.get("topic_title", ""),
-        "exit_condition": "understand the topic end to end",
-        "knowledge_baseline": {
-            "summary": "unknown",
-            "probed_concept": "",
-            "probe_result": "weak",
-        },
-        "available_hours": 10.0,
-        "context": "",
-    }
+    raw_profile = state.get("_discovery_profile")
 
-    result = await run_curriculum(profile)
+    if raw_profile:
+        prior_knowledge: list[str] = raw_profile.get("prior_knowledge", [])
+        curriculum_profile = _build_curriculum_profile(raw_profile)
+    else:
+        prior_knowledge = []
+        curriculum_profile = {
+            "topic": state.get("topic_title", ""),
+            "exit_condition": "understand the topic end to end",
+            "knowledge_baseline": {
+                "summary": "unknown",
+                "probed_concept": "",
+                "probe_result": "weak",
+            },
+            "available_hours": 12.0,  # 4 weeks × 3 hrs default
+        }
+
+    result = await run_curriculum(curriculum_profile)
 
     if result.get("error") or not result.get("validated_nodes"):
         return {
@@ -45,9 +156,22 @@ async def run_b2c_curriculum(state: dict) -> dict:
     topic_id = state["topic_id"]
     user_id = state["user_id"]
 
-    # Convert to KCNode objects
+    # ── Separate pre-known from new KCs ──────────────────────────────────────
+    # Pre-known KCs go FIRST in kc_graph so globalIdx < current_kc_index makes
+    # the sidebar show them as already done.  Teaching starts at first new KC.
+    pre_known_nodes = [n for n in validated_nodes if _is_pre_known(n.get("title", ""), prior_knowledge)]
+    new_nodes       = [n for n in validated_nodes if not _is_pre_known(n.get("title", ""), prior_knowledge)]
+
+    if pre_known_nodes:
+        print(f"[b2c_curriculum] {len(pre_known_nodes)} pre-known KC(s) detected: "
+              + ", ".join(n.get("title", "?") for n in pre_known_nodes))
+
+    ordered_nodes = pre_known_nodes + new_nodes
+    n_pre_known = len(pre_known_nodes)
+
+    # ── Build KCNode objects ──────────────────────────────────────────────────
     kc_nodes: list[KCNode] = []
-    for i, node in enumerate(validated_nodes):
+    for i, node in enumerate(ordered_nodes):
         kc_id = str(uuid.uuid4())
         kc_nodes.append(KCNode(
             id=kc_id,
@@ -57,8 +181,10 @@ async def run_b2c_curriculum(state: dict) -> dict:
             order_index=i,
         ))
 
-    # Persist to DB
-    for kc in kc_nodes:
+    # ── Persist to DB ─────────────────────────────────────────────────────────
+    for i, kc in enumerate(kc_nodes):
+        is_pre_known = i < n_pre_known
+
         try:
             await supabase.table("knowledge_components").insert({
                 "id": kc.id,
@@ -76,49 +202,59 @@ async def run_b2c_curriculum(state: dict) -> dict:
                 "user_id": user_id,
                 "kc_id": kc.id,
                 "topic_id": topic_id,
-                "p_learned": 0.0,
-                "p_l0": 0.1,
-                "status": "not_started",
+                # Pre-known KCs start as mastered; new KCs start fresh.
+                "p_learned": 0.9 if is_pre_known else 0.0,
+                "p_l0":      0.9 if is_pre_known else 0.1,
+                "status":    "mastered" if is_pre_known else "not_started",
             }).execute()
         except Exception as e:
             print(f"[b2c_curriculum] Failed to create KC state for '{kc.title}': {e}")
 
-    first_kc = kc_nodes[0] if kc_nodes else None
+    # Teaching starts at the first NEW KC (past all pre-known ones)
+    first_new_idx = n_pre_known
+    first_kc = kc_nodes[first_new_idx] if first_new_idx < len(kc_nodes) else None
 
     # Build intro message (gist)
     gist = result.get("gist") or (
-        f"Built {len(kc_nodes)} concepts for {state.get('topic_title', 'your topic')}. "
-        f"Let's start with the first one."
+        f"Built {len(new_nodes)} concept(s) for {state.get('topic_title', 'your topic')}."
+        + (f" Skipped {n_pre_known} you already know." if n_pre_known else "")
+        + " Let's start."
     )
 
-    # Persist curriculum to roadmaps table so the frontend dashboard can list
-    # and resume this session.  This must succeed — let exceptions propagate.
+    # Persist curriculum to roadmaps table
     roadmap_id = await save_roadmap(
         user_id=user_id,
         topic=state.get("topic_title", topic_id),
         sprint_plan=result.get("sprint_plan", {}),
         gist=gist,
         validated_nodes=validated_nodes,
-        learner_profile=state.get("_discovery_profile") or {},
+        learner_profile=raw_profile or {},
         sources_hit=result.get("sources_hit", []),
     )
     print(f"[b2c_curriculum] roadmap persisted: {roadmap_id}")
+
+    # Phase 'complete' if everything was pre-known (nothing left to teach)
+    next_phase = "complete" if first_kc is None else "teaching"
 
     return {
         "roadmap_id": roadmap_id,
         "kc_graph": kc_nodes,
         "total_kcs": len(kc_nodes),
-        "current_kc_index": 0,
+        "current_kc_index": first_new_idx,
         "current_kc_id": first_kc.id if first_kc else None,
         "current_attempt_number": 1,
         "max_attempts": 4,
         "pass_threshold": 0.65,
-        "bkt_state": {kc.id: 0.0 for kc in kc_nodes},
+        # Pre-known KCs get high P(L); new KCs start at 0
+        "bkt_state": {
+            kc.id: (0.9 if i < n_pre_known else 0.0)
+            for i, kc in enumerate(kc_nodes)
+        },
         "flags_this_session": [],
         "notes_generated": [],
         "context_window": [],
         "recent_turns": [],
         "session_summary": None,
-        "phase": "teaching",
+        "phase": next_phase,
         "pending_message": gist,
     }

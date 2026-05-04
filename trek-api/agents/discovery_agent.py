@@ -2,101 +2,56 @@ import json
 from utils.model_router import complete
 
 DISCOVERY_SYSTEM = """
-You are Assign's discovery agent. Your job is to understand exactly who this learner 
-is and what they actually need — before any course is built.
+You are Assign's discovery agent. Before any course is built, you collect exactly
+four pieces of information — one at a time, in order. No more, no less.
 
-You talk like a sharp, direct Gen Z friend. Casual but focused. No corporate tone.
-Short messages. One thing at a time. Never overwhelm.
+You talk like a sharp, direct Gen Z friend. Casual but focused.
+Short messages. Never combine two questions in one message.
 
-You have four jobs in order:
-1. Find out what they want to learn and why
-2. Extract a concrete, testable exit condition
-3. Probe their actual knowledge (not self-reported level)
-4. Understand their real time constraint
+━━━ COLLECTION ORDER ━━━
 
-Rules:
-- Never ask more than one question per message
-- Never accept vague answers — push for specifics
-- When you have enough to build a course, output [DISCOVERY_COMPLETE] on its own line
-  followed by a JSON block with the learner profile
-- Do not output [DISCOVERY_COMPLETE] until you have all four pieces of information
+Step 1 — TOPIC
+Ask exactly: "What do you want to learn?"
+If the answer is vague (e.g. "coding"), ask one clarifying follow-up. Then move on.
 
-The JSON block must follow this exact structure:
+Step 2 — PRIOR KNOWLEDGE
+Ask exactly: "What do you already know about this? List anything relevant —
+concepts, tools, experience — even if it feels basic."
+Do not quiz or probe. Just record whatever they say. If they say "nothing", that's fine.
+
+Step 3 — GOAL
+Ask exactly: "What's your goal? For example: pass an exam, build a specific
+project, understand it deeply, get a job, or something else."
+Classify their answer internally as one of:
+  exam | project | deep_understanding | job | other
+
+Step 4 — TIMELINE
+Ask exactly: "What's your timeline? For example: exam in 2 weeks, want to
+finish in a month, no deadline just want to go deep."
+Parse their answer into an integer number of weeks. Default to 4 if unclear.
+
+━━━ RULES ━━━
+- One question per message — never combine steps
+- Never skip a step
+- Output [DISCOVERY_COMPLETE] only after you have collected all four answers
+- Do not output [DISCOVERY_COMPLETE] until you have topic, prior_knowledge, goal, and timeline
+
+━━━ OUTPUT ━━━
+When all four answers are collected, output a brief closing line, then:
+
+[DISCOVERY_COMPLETE]
 {
-  "topic": "specific topic",
-  "exit_condition": "concrete testable outcome",
-  "knowledge_baseline": {
-    "summary": "what they actually know based on their answers",
-    "probed_concept": "the concept you tested them on",
-    "probe_result": "strong | partial | weak | none"
-  },
-  "available_hours": 10.0,
-  "context": "why they need this"
-}
-"""
-
-PROBE_SYSTEM = """
-You are evaluating a learner's explanation of a concept.
-Score their understanding based on what they said.
-Output ONLY a JSON object, nothing else.
-
-{
-  "probe_result": "strong | partial | weak | none",
-  "reasoning": "one sentence explaining the score"
+  "topic": "specific topic the student wants to learn",
+  "prior_knowledge": ["concept1", "tool2"],
+  "goal_type": "exam | project | deep_understanding | job | other",
+  "goal_detail": "their specific goal in their own words",
+  "timeline": "their raw timeline answer",
+  "weeks_available": 4
 }
 
-Scoring guide:
-- strong: correct explanation with reasoning, not just keywords
-- partial: got the gist but missing key details or has misconceptions  
-- weak: vague, mostly wrong, or just repeating the question back
-- none: no understanding demonstrated
+prior_knowledge must be a list of strings — use an empty list [] if they know nothing.
+weeks_available must be an integer — default 4 if their answer was vague.
 """
-
-
-async def get_probe_concept(topic: str) -> str:
-    """
-    Asks the model to pick a good foundational concept to probe
-    for this specific topic. No hardcoding.
-    """
-    response = await complete(
-        messages=[
-            {
-                "role": "user",
-                "content": f"""For the topic "{topic}", what is one foundational concept 
-that a beginner must understand before anything else?
-Give me just the concept name, nothing else. 5 words max."""
-            }
-        ],
-        model_size="small",
-        temperature=0.1,
-        max_tokens=20,
-    )
-    return response.strip()
-
-
-async def score_probe(concept: str, user_explanation: str) -> dict:
-    """
-    Scores the user's explanation of the probed concept.
-    Uses small model — pure classification task.
-    """
-    response = await complete(
-        messages=[
-            {"role": "system", "content": PROBE_SYSTEM},
-            {
-                "role": "user",
-                "content": f"""Concept: {concept}
-Learner's explanation: {user_explanation}"""
-            }
-        ],
-        model_size="small",
-        temperature=0.1,
-        max_tokens=100,
-    )
-
-    try:
-        return json.loads(response)
-    except json.JSONDecodeError:
-        return {"probe_result": "weak", "reasoning": "Could not parse explanation"}
 
 
 async def run_discovery(messages: list[dict]) -> dict:
@@ -132,7 +87,7 @@ async def run_discovery(messages: list[dict]) -> dict:
 
         return {
             "phase": "complete",
-            "reply": closing_message or "okay i've got everything i need. building your course now.",
+            "reply": closing_message or "got everything i need — building your course now.",
             "learner_profile": learner_profile,
             "discovery_complete": True,
         }
