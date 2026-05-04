@@ -35,6 +35,10 @@ VALIDATOR_SYSTEM_PROMPT = """You are evaluating whether a student genuinely unde
 PRIMARY QUESTION: Could this student explain this concept to a friend who had never heard of it?
 If yes — even if imprecisely worded — that is mastery.
 
+Judge the CORE concept the student was actually asked to explain.
+Do not require every related sub-topic, edge case, or implementation detail.
+If the student answered the actual question correctly, they should usually pass.
+
 Score on THREE dimensions. Return ONLY valid JSON. No preamble, no markdown, no explanation outside the JSON.
 
 ━━━ RUBRIC ━━━
@@ -44,7 +48,8 @@ Score on THREE dimensions. Return ONLY valid JSON. No preamble, no markdown, no 
    • Correct concept in informal language → HIGH score (0.75+)
    • Missing technical terms is NOT a penalty if the idea is right
    • Low scores (< 0.40) only for factual errors or fundamental misunderstandings
-   • Do NOT penalize for omitting edge cases, especially on attempts 1 or 2
+   • Do NOT penalize for omitting edge cases or optional sub-topics, especially on attempts 1 or 2
+   • Missing nuance is not a reason to fail if the core idea is right
 
 2. own_words  (weight 0.30)
    Did they explain it with their own framing and examples?
@@ -57,6 +62,13 @@ Score on THREE dimensions. Return ONLY valid JSON. No preamble, no markdown, no 
    • One correct "why" or causal reasoning → HIGH (0.75+)
    • Description of behavior only, no reasoning → LOW (0.30–0.50)
    • Do not require exhaustive explanations — one good reason is enough
+   • On attempts 1 or 2, missing depth beyond the core idea should not be treated as failure
+
+━━━ PASS / EDGE-CASE RULES ━━━
+• weighted_score >= 0.65 = passed.
+• On attempts 1 or 2, do not fail them for missing edge cases, caveats, or extra sub-topics.
+• Only after attempt 2, and only if the core idea is already understood, you may mention one extra nuance.
+• That extra nuance should be a growth pointer after a pass, not the reason they failed.
 
 ━━━ FEEDBACK RULES (non-negotiable) ━━━
 
@@ -73,6 +85,9 @@ If weighted score < 0.65 (not yet):
   feedback = "[acknowledge the ONE most correct thing they said] + [identify ONE specific
   gap — not a list, just the most important thing missing]"
   what_was_wrong = one specific gap only
+  The gap must be directly actionable and materially different from any previous feedback supplied in the prompt.
+
+Never repeat the same what_was_wrong across attempts if the prompt lists previous feedback already given.
 
 ━━━ JSON FORMAT ━━━
 {
@@ -112,6 +127,50 @@ _BKT_DEFAULTS = {
 
 def _with_default(value, default):
     return default if value is None else value
+
+
+def _extract_feedback_strings(rows: list[dict] | None) -> list[str]:
+    feedback_points: list[str] = []
+    for row in rows or []:
+        payload = row.get("quality_label")
+        if not payload:
+            continue
+        parsed = None
+        if isinstance(payload, str):
+            try:
+                parsed = json.loads(payload)
+            except json.JSONDecodeError:
+                parsed = payload.strip()
+        elif isinstance(payload, dict):
+            parsed = payload
+
+        if isinstance(parsed, dict):
+            for key in ("what_was_wrong", "feedback"):
+                value = parsed.get(key)
+                if isinstance(value, str):
+                    value = value.strip()
+                    if value and value not in feedback_points:
+                        feedback_points.append(value)
+        elif isinstance(parsed, str):
+            parsed = parsed.strip()
+            if parsed and parsed not in feedback_points:
+                feedback_points.append(parsed)
+    return feedback_points
+
+
+async def _load_previous_feedback(user_id: str, kc_id: str) -> list[str]:
+    try:
+        result = await supabase.table("interaction_log") \
+            .select("quality_label") \
+            .eq("user_id", user_id) \
+            .eq("kc_id", kc_id) \
+            .order("created_at", desc=True) \
+            .limit(3) \
+            .execute()
+        return _extract_feedback_strings(result.data)
+    except Exception as e:
+        print(f"[mastery_validator] Failed to load prior feedback for kc={kc_id}: {e}")
+        return []
 
 
 async def _ensure_bkt_row(user_id: str, kc_id: str, topic_id: str) -> None:
@@ -260,6 +319,7 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
     user_id = state["user_id"]
     kc_id = state["current_kc_id"]
     topic_id = state["topic_id"]
+    previous_feedback = await _load_previous_feedback(user_id, kc_id)
 
     # ── Step 1: LLM rubric scoring ────────────────────────────────────────────
     response = await client.chat.completions.create(
@@ -272,6 +332,8 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
                 f"Concept being assessed: {kc.title}\n"
                 f"Concept description: {kc.description}\n"
                 f"Attempt number: {attempt_num} of 4\n\n"
+                f"Previous feedback already given: {previous_feedback}. "
+                "Do not repeat any of these points.\n\n"
                 f"Student's explanation:\n\"\"\"{explanation}\"\"\"\n\n"
                 f"Score this explanation strictly."
             )}

@@ -6,42 +6,30 @@ Every teaching turn must end with this ask.
 Teaching must be adaptive — if the student failed a previous attempt, teach differently.
 """
 
+import re
+
+from prompts.teacher import TEACHING_SYSTEM_PROMPT
 from utils.model_router import get_model_name
 
-TEACHING_SYSTEM_PROMPT = """You are Assign, an adaptive tutor. Your behavior is strictly governed by which attempt this is.
+_ANALOGY_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
-━━━ ATTEMPT 1 — first time teaching this concept ━━━
-• Start with ONE short question to probe what the student already knows.
-  e.g. "Before I explain, what do you already know about [concept]?"
-• Keep the initial explanation to 2–3 sentences max. One analogy if it helps.
-• Total response must be under 60 words.
-• End with: "Now explain [concept] back to me in your own words."
 
-━━━ ATTEMPT 2 — student got a partial score ━━━
-• Address ONLY the one specific gap identified in the validator feedback.
-• Use a COMPLETELY DIFFERENT analogy or example than anything already in the chat history.
-• Do NOT re-explain the full concept — only the gap.
-• Under 80 words total.
-• End with a targeted question that directly tests the gap, not a generic "explain it back."
-
-━━━ ATTEMPT 3 ━━━
-• Go concrete: give a specific code example, real-world scenario, or step-by-step breakdown.
-• Ask a narrow, targeted question that only works if they understand the gap.
-• Under 80 words.
-
-━━━ ATTEMPT 4 — final attempt ━━━
-• Be direct. State the specific missing piece in exactly one sentence.
-• Then ask them to explain just that one thing back.
-• Under 60 words.
-
-━━━ ALWAYS ━━━
-• Never use the same analogy twice in a session. Scan the conversation history
-  for any analogy already used and explicitly choose something different.
-• Never re-explain the full concept after attempt 1 — only address the gap.
-• Never ask multiple questions. One ask per response, always.
-• If flag_type is 'misconception': correct the specific misconception in one sentence first,
-  then proceed with the attempt rules above.
-"""
+def _extract_used_analogies(recent_turns: list[dict]) -> list[str]:
+    """Pull prior analogy-style sentences from the recent chat history."""
+    used: list[str] = []
+    for turn in recent_turns:
+        content = turn.get("content", "")
+        if not isinstance(content, str):
+            continue
+        for sentence in _ANALOGY_SENTENCE_SPLIT_RE.split(content):
+            normalized = " ".join(sentence.split()).strip()
+            lowered = normalized.lower()
+            if not normalized:
+                continue
+            if "like a" in lowered or "like an" in lowered or "think of" in lowered:
+                if normalized not in used:
+                    used.append(normalized)
+    return used
 
 
 async def run_teaching(state: dict, client) -> dict:
@@ -51,6 +39,15 @@ async def run_teaching(state: dict, client) -> dict:
     """
     kc = next(k for k in state["kc_graph"] if k.id == state["current_kc_id"])
     attempt = state.get("current_attempt_number", 1)
+    recent_turns = list(state.get("recent_turns", []))
+    used_analogies = _extract_used_analogies(recent_turns)
+    forbidden_analogies = ""
+    if used_analogies:
+        joined = " | ".join(used_analogies)
+        forbidden_analogies = (
+            f"\nDo not use these analogies: {joined}. "
+            "Use a completely different comparison."
+        )
 
     # Build re-attempt context if needed.
     # Note: score keys match the 3-dimension rubric (core_accuracy, own_words, depth).
@@ -104,19 +101,36 @@ async def run_teaching(state: dict, client) -> dict:
             f"Concept: {kc.title}\n"
             f"Description: {kc.description}\n"
             f"{misconception_note}"
+            f"{forbidden_analogies}"
             f"{style_note}\n\n"
             "This is the student's first time seeing this concept. "
             "Follow the ATTEMPT 1 rules: probe question first, brief explanation, under 60 words."
         )
-    else:
+    elif attempt == 2:
         task_instruction = (
             f"Concept: {kc.title}\n"
             f"{reattempt_context}"
             f"{misconception_note}"
+            f"{forbidden_analogies}"
+            f"{style_note}\n\n"
+            "Follow the ATTEMPT 2 rules. "
+            "Address only the gap. Do not re-explain the full concept. "
+            "If you use a comparison at all, it must be completely different from the forbidden analogies."
+        )
+    else:
+        direct_example_note = (
+            "\nNo analogies. Use a direct, concrete code example or explicit step-by-step explanation."
+        )
+        task_instruction = (
+            f"Concept: {kc.title}\n"
+            f"{reattempt_context}"
+            f"{misconception_note}"
+            f"{forbidden_analogies}"
+            f"{direct_example_note}"
             f"{style_note}\n\n"
             f"Follow the ATTEMPT {attempt} rules. "
             "Address only the gap. Do not re-explain the full concept. "
-            "Choose an analogy not yet used in this conversation."
+            "Use no analogies."
         )
 
     messages = [
@@ -136,8 +150,7 @@ async def run_teaching(state: dict, client) -> dict:
     full_text = response.choices[0].message.content.strip()
 
     # Update recent turns
-    recent = state.get("recent_turns", [])
-    recent = (recent + [{"role": "assistant", "content": full_text}])[-6:]
+    recent = (recent_turns + [{"role": "assistant", "content": full_text}])[-6:]
 
     return {
         "phase": "awaiting_explanation",

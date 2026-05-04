@@ -119,8 +119,8 @@ async def test_reattempt_does_not_raise():
     state = _make_state(
         current_attempt_number=2,
         last_rubric_scores={
-            "core_idea": 0.3,
-            "reasoning_quality": 0.4,
+            "core_accuracy": 0.3,
+            "depth": 0.4,
             "what_was_wrong": "missed the base case",
         },
     )
@@ -142,3 +142,50 @@ async def test_misconception_flag_triggers_special_prompt():
     )
     result = await run_teaching(state, _mock_client())
     assert result["phase"] == "awaiting_explanation"
+
+
+async def test_attempt_two_forbids_reused_analogies():
+    from agents.b2c_teaching_agent import run_teaching
+
+    client = _mock_client()
+    state = _make_state(
+        current_attempt_number=2,
+        last_rubric_scores={
+            "what_was_right": "You said the function calls itself.",
+            "what_was_wrong": "missed the base case",
+        },
+        recent_turns=[
+            {
+                "role": "assistant",
+                "content": "Think of recursion like a stack of nested boxes.",
+            }
+        ],
+    )
+
+    await run_teaching(state, client)
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    task_instruction = messages[-1]["content"]
+    assert "Do not use these analogies:" in task_instruction
+    assert "Think of recursion like a stack of nested boxes." in task_instruction
+
+
+async def test_attempt_three_switches_to_code_example_and_no_analogies():
+    from agents.b2c_teaching_agent import run_teaching
+
+    client = _mock_client()
+    state = _make_state(
+        current_attempt_number=3,
+        last_rubric_scores={
+            "what_was_right": "You identified that recursion repeats a pattern.",
+            "what_was_wrong": "didn't explain the base case",
+        },
+    )
+
+    await run_teaching(state, client)
+
+    messages = client.chat.completions.create.call_args.kwargs["messages"]
+    system_prompt = messages[0]["content"]
+    task_instruction = messages[-1]["content"]
+    assert "After attempt 2, stop using analogies entirely" in system_prompt
+    assert "No analogies. Use a direct, concrete code example" in task_instruction
