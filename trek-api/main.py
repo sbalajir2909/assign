@@ -1,8 +1,10 @@
 import os
 import uuid
 import json
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import List, Optional
+from psycopg.rows import dict_row
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -223,6 +225,7 @@ class B2CStartRequest(BaseModel):
     user_id: str
     syllabus_base64: Optional[str] = None
     syllabus_mime_type: Optional[str] = None
+    review_kc_id: Optional[str] = None
 
 class B2CTrekMessage(BaseModel):
     user_id: str
@@ -269,11 +272,145 @@ def _b2c_initial_state(user_id: str, session_id: str, syllabus_topics: Optional[
     }
 
 
+async def _load_review_kc_state(user_id: str, kc_id: str) -> Optional[dict]:
+    """
+    Loads the minimum topic + KC state needed to start a one-KC review session.
+    """
+    if not _b2c_pool:
+        raise RuntimeError("B2C pool not initialized")
+
+    query = """
+        SELECT
+            kc.id AS kc_id,
+            kc.title AS kc_title,
+            kc.description AS kc_description,
+            kc.prerequisites AS kc_prerequisites,
+            kc.order_index AS kc_order_index,
+            t.id AS topic_id,
+            t.title AS topic_title,
+            skc.p_learned,
+            skc.attempt_count,
+            skc.flag_type,
+            skc.flag_reason
+        FROM student_kc_state skc
+        JOIN knowledge_components kc ON skc.kc_id = kc.id
+        JOIN topics t ON skc.topic_id = t.id
+        WHERE skc.user_id = %s
+          AND kc.id = %s
+          AND t.user_id = %s
+        LIMIT 1
+    """
+    async with _b2c_pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(query, (user_id, kc_id, user_id))
+            return await cur.fetchone()
+
+
+async def _fetch_due_review_kcs(user_id: str) -> dict:
+    """
+    Returns due review KCs plus total due count for the dashboard/review page.
+    """
+    if not _b2c_pool:
+        raise RuntimeError("B2C pool not initialized")
+
+    query = """
+        SELECT
+            skc.kc_id,
+            kc.title AS kc_title,
+            kc.topic_id,
+            t.title AS topic_title,
+            skc.sm2_next_review,
+            skc.sm2_interval,
+            COUNT(*) OVER() AS due_count
+        FROM student_kc_state skc
+        JOIN knowledge_components kc ON skc.kc_id = kc.id
+        JOIN topics t ON skc.topic_id = t.id
+        WHERE skc.user_id = %s
+          AND skc.status = 'mastered'
+          AND skc.sm2_next_review IS NOT NULL
+          AND skc.sm2_next_review <= NOW()
+        ORDER BY skc.sm2_next_review ASC
+        LIMIT 20
+    """
+
+    async with _b2c_pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(query, (user_id,))
+            rows = await cur.fetchall()
+
+    due_count = int(rows[0]["due_count"]) if rows else 0
+    now = datetime.now(timezone.utc)
+    kcs = []
+    for row in rows:
+        next_review = row["sm2_next_review"]
+        if next_review.tzinfo is None:
+            next_review = next_review.replace(tzinfo=timezone.utc)
+        overdue_days = max(0, (now.date() - next_review.date()).days)
+        kcs.append({
+            "kc_id": row["kc_id"],
+            "kc_title": row["kc_title"],
+            "topic_title": row["topic_title"],
+            "topic_id": row["topic_id"],
+            "days_overdue": overdue_days,
+            "sm2_interval": row["sm2_interval"],
+        })
+
+    return {"due_count": due_count, "kcs": kcs}
+
+
 @app.post("/api/b2c/session")
 async def b2c_start_session(req: B2CStartRequest):
     """Start a new B2C adaptive learning session."""
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
+
+    if req.review_kc_id:
+        from graph.b2c_state import KCNode
+
+        review_row = await _load_review_kc_state(req.user_id, req.review_kc_id)
+        if not review_row:
+            raise HTTPException(status_code=404, detail="Review concept not found")
+
+        initial_state = _b2c_initial_state(req.user_id, session_id)
+        review_kc = KCNode(
+            id=review_row["kc_id"],
+            title=review_row["kc_title"],
+            description=review_row["kc_description"] or "",
+            prerequisites=[str(p) for p in (review_row["kc_prerequisites"] or [])],
+            order_index=review_row["kc_order_index"] or 0,
+            p_learned=review_row["p_learned"] or 0.0,
+            status="in_progress",
+            attempt_count=review_row["attempt_count"] or 0,
+            flag_type=review_row["flag_type"],
+            flag_reason=review_row["flag_reason"],
+        )
+        initial_state.update({
+            "topic_id": review_row["topic_id"],
+            "topic_title": review_row["topic_title"],
+            "phase": "teaching",
+            "current_kc_index": 0,
+            "current_kc_id": review_row["kc_id"],
+            "kc_graph": [review_kc],
+            "total_kcs": 1,
+            "bkt_state": {
+                review_row["kc_id"]: review_row["p_learned"] or 0.0,
+            },
+            "flags_this_session": (
+                [{
+                    "kc_id": review_row["kc_id"],
+                    "kc_title": review_row["kc_title"],
+                    "flag_type": review_row["flag_type"],
+                    "flag_reason": review_row["flag_reason"],
+                }]
+                if review_row["flag_type"] else []
+            ),
+        })
+        result = await b2c_graph.ainvoke(initial_state, config=config)
+        return {
+            "session_id": session_id,
+            "reply": result.get("pending_message", ""),
+            "phase": result.get("phase", "teaching"),
+        }
 
     # Extract syllabus structure before creating the session.
     # Raw bytes are never stored — only the parsed topic list.
@@ -456,6 +593,14 @@ async def b2c_get_topics(user_id: str):
     try:
         result = await supabase.table("topics").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
         return result.data or []
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/b2c/review/{user_id}")
+async def b2c_get_review_due(user_id: str):
+    try:
+        return await _fetch_due_review_kcs(user_id)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

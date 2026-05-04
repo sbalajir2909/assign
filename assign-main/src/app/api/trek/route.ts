@@ -13,6 +13,7 @@ export async function POST(req: NextRequest) {
     topic_id?: string
     syllabus_base64?: string
     syllabus_mime_type?: string
+    review_kc_id?: string
   } = {}
 
   try {
@@ -21,7 +22,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid json body' }, { status: 400 })
   }
 
-  const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type } = body
+  const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type, review_kc_id } = body
 
   try {
     // ── Start new session ──────────────────────────────────────────────────
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest) {
       const sessionPayload: Record<string, string> = { user_id: user_id! }
       if (syllabus_base64) sessionPayload.syllabus_base64 = syllabus_base64
       if (syllabus_mime_type) sessionPayload.syllabus_mime_type = syllabus_mime_type
+      if (review_kc_id) sessionPayload.review_kc_id = review_kc_id
 
       const res = await fetch(`${TREK_API_URL}/api/b2c/session`, {
         method: 'POST',
@@ -84,6 +86,32 @@ export async function POST(req: NextRequest) {
 
   } catch (err) {
     console.error('[trek route]', err)
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : 'trek-api error' },
+      { status: 500 }
+    )
+  }
+}
+
+export async function GET(req: NextRequest) {
+  const { searchParams } = new URL(req.url)
+  const action = searchParams.get('action')
+  const userId = searchParams.get('userId') || searchParams.get('user_id')
+
+  if (action !== 'review' || !userId) {
+    return NextResponse.json({ error: 'invalid action' }, { status: 400 })
+  }
+
+  try {
+    const res = await fetch(`${TREK_API_URL}/api/b2c/review/${userId}`)
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`trek-api ${res.status}: ${text}`)
+    }
+    const data = await res.json()
+    return NextResponse.json(data)
+  } catch (err) {
+    console.error('[trek route get]', err)
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'trek-api error' },
       { status: 500 }

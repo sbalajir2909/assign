@@ -101,6 +101,21 @@ export interface B2CStartResponse {
   session_id: string
   reply: string
   phase: Phase
+  syllabus_extracted?: boolean
+}
+
+export interface ReviewDueKC {
+  kc_id: string
+  kc_title: string
+  topic_title: string
+  topic_id: string
+  days_overdue: number
+  sm2_interval: number
+}
+
+export interface ReviewDueResponse {
+  due_count: number
+  kcs: ReviewDueKC[]
 }
 
 export interface ChatMessage {

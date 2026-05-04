@@ -26,6 +26,7 @@ import json
 from datetime import datetime, timezone
 from utils.model_router import get_model_name
 from utils.bkt import update_bkt
+from utils.sm2 import update_sm2
 from utils.interaction_logger import log_interaction
 from db.client import supabase
 
@@ -103,6 +104,9 @@ _BKT_DEFAULTS = {
     "p_slip": 0.10,
     "p_guess": 0.20,
     "attempt_count": 0,
+    "sm2_easiness": 2.5,
+    "sm2_interval": 1,
+    "sm2_repetitions": 0,
 }
 
 
@@ -110,7 +114,10 @@ async def _load_bkt_row(user_id: str, kc_id: str) -> dict:
     """Fetches BKT state for (user, KC). Returns defaults if no row exists."""
     try:
         result = await supabase.table("student_kc_state") \
-            .select("p_learned, p_transit, p_slip, p_guess, attempt_count") \
+            .select(
+                "p_learned, p_transit, p_slip, p_guess, attempt_count, "
+                "sm2_easiness, sm2_interval, sm2_repetitions"
+            ) \
             .eq("user_id", user_id) \
             .eq("kc_id", kc_id) \
             .maybe_single() \
@@ -122,10 +129,27 @@ async def _load_bkt_row(user_id: str, kc_id: str) -> dict:
                 "p_slip":    result.data.get("p_slip",    _BKT_DEFAULTS["p_slip"]),
                 "p_guess":   result.data.get("p_guess",   _BKT_DEFAULTS["p_guess"]),
                 "attempt_count": result.data.get("attempt_count", 0),
+                "sm2_easiness": result.data.get("sm2_easiness", _BKT_DEFAULTS["sm2_easiness"]),
+                "sm2_interval": result.data.get("sm2_interval", _BKT_DEFAULTS["sm2_interval"]),
+                "sm2_repetitions": result.data.get("sm2_repetitions", _BKT_DEFAULTS["sm2_repetitions"]),
             }
     except Exception as e:
         print(f"[mastery_validator] Failed to load BKT state for kc={kc_id}: {e}")
     return dict(_BKT_DEFAULTS)
+
+
+def _sm2_quality_from_score(weighted_score: float, force_advanced: bool) -> int:
+    if force_advanced:
+        return 2
+    if weighted_score >= 0.9:
+        return 5
+    if weighted_score >= 0.8:
+        return 4
+    if weighted_score >= 0.65:
+        return 3
+    if weighted_score >= 0.5:
+        return 2
+    return 1
 
 
 async def _upsert_bkt_row(
@@ -138,6 +162,7 @@ async def _upsert_bkt_row(
     mastery: bool,
     force_advanced: bool,
     flag_type: str | None,
+    sm2_update: tuple[float, int, int, str] | None = None,
 ) -> None:
     """Persists updated BKT state to student_kc_state."""
     if mastery:
@@ -148,19 +173,31 @@ async def _upsert_bkt_row(
         status = "in_progress"
 
     now = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "user_id": user_id,
+        "kc_id": kc_id,
+        "topic_id": topic_id,
+        "p_learned": new_p_learned,
+        "attempt_count": attempt_count,
+        "last_attempt_score": last_score,
+        "status": status,
+        "flag_type": flag_type,
+        "last_studied_at": now,
+        "updated_at": now,
+    }
+    if sm2_update:
+        new_easiness, new_interval, new_repetitions, next_review_iso = sm2_update
+        payload.update({
+            "sm2_easiness": new_easiness,
+            "sm2_interval": new_interval,
+            "sm2_repetitions": new_repetitions,
+            "sm2_next_review": next_review_iso,
+        })
     try:
-        await supabase.table("student_kc_state").upsert({
-            "user_id": user_id,
-            "kc_id": kc_id,
-            "topic_id": topic_id,
-            "p_learned": new_p_learned,
-            "attempt_count": attempt_count,
-            "last_attempt_score": last_score,
-            "status": status,
-            "flag_type": flag_type,
-            "last_studied_at": now,
-            "updated_at": now,
-        }, on_conflict="user_id,kc_id").execute()
+        await supabase.table("student_kc_state").upsert(
+            payload,
+            on_conflict="user_id,kc_id",
+        ).execute()
     except Exception as e:
         print(f"[mastery_validator] Failed to persist BKT state for kc={kc_id}: {e}")
 
@@ -232,9 +269,25 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
 
     # ── Step 3: Mastery gate ──────────────────────────────────────────────────
     mastery = new_p_learned >= BKT_MASTERY_THRESHOLD
-    force_advance = attempt_num >= 4
+    force_advance = attempt_num >= 4 and not mastery
     advance = mastery or force_advance
     new_attempt_count = bkt_row["attempt_count"] + 1
+
+    sm2_update = None
+    if advance:
+        quality = _sm2_quality_from_score(weighted, force_advance)
+        new_easiness, new_interval, new_repetitions, next_review = update_sm2(
+            easiness=bkt_row["sm2_easiness"],
+            interval=bkt_row["sm2_interval"],
+            repetitions=bkt_row["sm2_repetitions"],
+            quality=quality,
+        )
+        sm2_update = (
+            new_easiness,
+            new_interval,
+            new_repetitions,
+            next_review.isoformat(),
+        )
 
     # ── Step 4: Flag determination ────────────────────────────────────────────
     flag_type = None
@@ -264,6 +317,7 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
         mastery=mastery,
         force_advanced=force_advance,
         flag_type=flag_type,
+        sm2_update=sm2_update,
     )
 
     # ── Step 6: Log attempt ───────────────────────────────────────────────────

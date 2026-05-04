@@ -3,9 +3,10 @@
 export const dynamic = 'force-dynamic'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { useRouter } from 'next/navigation'
-import type { Topic } from '@/lib/types'
+import type { Topic, ReviewDueResponse } from '@/lib/types'
 
 interface Roadmap {
   id: string
@@ -29,6 +30,7 @@ const MODES = [
 export default function Dashboard() {
   const [roadmaps, setRoadmaps] = useState<Roadmap[]>([])
   const [topics, setTopics] = useState<Topic[]>([])
+  const [reviewDue, setReviewDue] = useState<ReviewDueResponse>({ due_count: 0, kcs: [] })
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<{ email: string; id: string } | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
@@ -57,6 +59,16 @@ export default function Dashboard() {
         }
       } catch (e) {
         console.error('[dashboard topics]', e)
+      }
+
+      try {
+        const reviewRes = await fetch(`/api/b2c/review/${session.user.id}`)
+        if (reviewRes.ok) {
+          const reviewData = await reviewRes.json()
+          setReviewDue(reviewData || { due_count: 0, kcs: [] })
+        }
+      } catch (e) {
+        console.error('[dashboard review due]', e)
       }
 
       setLoading(false)
@@ -90,10 +102,10 @@ export default function Dashboard() {
 
       {/* Nav */}
       <nav className="flex justify-between items-center px-10 py-5 border-b-2 border-foreground">
-        <a href="/" className="flex items-center gap-2 no-underline">
+        <Link href="/" className="flex items-center gap-2 no-underline">
           <span className="w-2 h-2 rounded-full bg-primary inline-block" />
           <span className="font-mono text-lg font-medium text-foreground tracking-tight">assign</span>
-        </a>
+        </Link>
         <div className="flex items-center gap-5">
           <a href="/progress" className="font-mono text-xs text-muted-foreground no-underline hover:text-primary transition-colors">
             progress
@@ -118,18 +130,62 @@ export default function Dashboard() {
           </h1>
         </div>
 
+        {reviewDue.due_count > 0 && (
+          <section className="mb-14">
+            <div className="brutalist-shadow bg-card border-2 border-foreground p-6">
+              <div className="flex justify-between items-start gap-6 mb-5">
+                <div>
+                  <p className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.16em] mb-2">
+                    review queue
+                  </p>
+                  <h2 className="font-mono text-2xl font-bold text-foreground tracking-tight">
+                    {reviewDue.due_count} concepts ready for review
+                  </h2>
+                </div>
+                <Link
+                  href="/trek/review"
+                  className="brutalist-shadow-hover font-mono text-xs font-bold border-2 border-foreground px-4 py-3 bg-primary text-foreground no-underline whitespace-nowrap"
+                >
+                  start review →
+                </Link>
+              </div>
+
+              <div className="grid gap-2">
+                {reviewDue.kcs.slice(0, 3).map(kc => (
+                  <div
+                    key={kc.kc_id}
+                    className="border-2 border-foreground bg-background px-4 py-3 flex justify-between gap-4"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-mono text-sm font-bold text-foreground tracking-tight truncate">
+                        {kc.kc_title}
+                      </div>
+                      <div className="font-mono text-[11px] text-muted-foreground mt-1">
+                        {kc.topic_title}
+                      </div>
+                    </div>
+                    <div className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.12em] text-right whitespace-nowrap">
+                      {kc.days_overdue > 0 ? `${kc.days_overdue}d overdue` : 'due today'}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Mode cards */}
         <section className="mb-16">
           <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest mb-5">choose a mode</p>
           <div className="grid grid-cols-4 gap-4">
             {MODES.map(mode => (
-              <a key={mode.label} href={mode.href}
+              <Link key={mode.label} href={mode.href}
                 className="brutalist-shadow brutalist-shadow-hover block border-2 border-foreground bg-card p-6 no-underline">
                 <div className="text-3xl mb-4">{mode.emoji}</div>
                 <div className="font-mono font-bold text-xl text-foreground mb-1 uppercase tracking-tight">{mode.label}</div>
                 <div className="font-mono text-xs text-primary mb-3">{mode.tagline}</div>
                 <div className="font-sans text-xs text-muted-foreground leading-relaxed">{mode.desc}</div>
-              </a>
+              </Link>
             ))}
           </div>
         </section>
@@ -138,9 +194,9 @@ export default function Dashboard() {
           <section className="mb-16">
             <div className="flex justify-between items-center mb-5">
               <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">adaptive topics</p>
-              <a href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+              <Link href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
                 + start adaptive trek
-              </a>
+              </Link>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -161,18 +217,18 @@ export default function Dashboard() {
                   </div>
 
                   <div className="flex gap-2">
-                    <a
+                    <Link
                       href={`/trek/${topic.id}`}
                       className="font-mono text-xs text-foreground border-2 border-foreground px-3 py-2 bg-background no-underline hover:bg-muted transition-colors"
                     >
                       open →
-                    </a>
-                    <a
+                    </Link>
+                    <Link
                       href={`/progress?topic=${topic.id}`}
                       className="font-mono text-xs text-muted-foreground border-2 border-muted px-3 py-2 bg-background no-underline hover:text-foreground transition-colors"
                     >
                       progress
-                    </a>
+                    </Link>
                   </div>
                 </div>
               ))}
@@ -184,9 +240,9 @@ export default function Dashboard() {
         <section>
           <div className="flex justify-between items-center mb-5">
             <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">your trek courses</p>
-            <a href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+            <Link href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
               + new course
-            </a>
+            </Link>
           </div>
 
           {loading ? (
@@ -195,9 +251,9 @@ export default function Dashboard() {
           ) : roadmaps.length === 0 ? (
             <div className="py-16 px-6 text-center border-2 border-dashed border-muted">
               <p className="font-mono text-sm text-muted-foreground mb-6">no courses yet — start your first trek</p>
-              <a href="/trek/new" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
+              <Link href="/trek/new" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
                 start trek →
-              </a>
+              </Link>
             </div>
 
           ) : (
@@ -227,10 +283,10 @@ export default function Dashboard() {
                       </div>
 
                       <div className="flex gap-2 items-center flex-shrink-0">
-                        <a href={`/trek/materials?id=${rm.id}`}
+                        <Link href={`/trek/materials?id=${rm.id}`}
                           className="font-mono text-xs text-foreground border-2 border-foreground px-3 py-2 bg-background no-underline hover:bg-muted transition-colors">
                           notes
-                        </a>
+                        </Link>
                         <button onClick={() => deleteCourse(rm.id)} disabled={deleting === rm.id}
                           className="font-mono text-xs text-muted-foreground border-2 border-muted px-3 py-2 bg-background cursor-pointer hover:text-red-500 transition-colors">
                           {deleting === rm.id ? '...' : 'delete'}
