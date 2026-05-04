@@ -53,6 +53,11 @@ function TrekPageInner() {
   // ── Session ────────────────────────────────────────────────────────────────
   const [sessionId, setSessionId] = useState<string>('')
   const [userId, setUserId] = useState<string>('')
+  // backendPhase mirrors the trek-api checkpoint phase — sent back on every
+  // message so route_intent can classify explanations vs other input.
+  const [backendPhase, setBackendPhase] = useState<string>('discovery')
+  // topicId is set once curriculum builds; required by /api/b2c/message.
+  const [topicId, setTopicId] = useState<string>('')
 
   // ── UI state ───────────────────────────────────────────────────────────────
   const [phase, setPhase] = useState<Phase>('discovery')
@@ -135,6 +140,7 @@ function TrekPageInner() {
     try {
       const data = await trekApi('start', { user_id: uid })
       setSessionId(data.session_id)
+      if (data.phase) setBackendPhase(data.phase)
       setMessages([{ role: 'assistant', content: data.reply }])
     } catch {
       setMessages([{ role: 'assistant', content: 'something went wrong starting trek. refresh and try again.' }])
@@ -166,74 +172,129 @@ function TrekPageInner() {
     setPhase('learning')
   }
 
-  // ── Send message ───────────────────────────────────────────────────────────
+  // ── Send message — reads SSE stream from /api/trek ────────────────────────
   const send = async () => {
     if (!input.trim() || loading) return
     const userMsg: Message = { role: 'user', content: input }
+    const sentInput = input
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setLoading(true)
     setVisual(null)
 
     try {
-      const data = await trekApi('message', {
-        session_id: sessionId,
-        user_id: userId,
-        message: input,
-        roadmap_id: roadmapId || null,
-      })
-
-      // ── Handle phase transitions ─────────────────────────────────────────
-      const newPhase = data.phase
-
-      if (newPhase === 'generation') {
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: 'building your course — searching sources and building your learning path. give me a moment...'
-        }])
-        const curriculumData = await trekApi('message', {
+      const res = await fetch('/api/trek', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'message',
           session_id: sessionId,
           user_id: userId,
-          message: '__generate__',
+          message: sentInput,
+          phase: backendPhase,
+          topic_id: topicId,
           roadmap_id: roadmapId || null,
-        })
-        if (curriculumData.phase === 'gist' && curriculumData.gist) {
-          setGist(curriculumData.gist)
-          setSprintPlan(curriculumData.sprint_plan)
-          setPhase('gist')
-          setMessages(prev => [...prev, {
-            role: 'assistant',
-            content: curriculumData.gist
-          }])
+        }),
+      })
+
+      if (!res.ok || !res.body) throw new Error(`trek api error ${res.status}`)
+
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buf = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += decoder.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() ?? ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const raw = line.slice(6).trim()
+          if (!raw) continue
+          try {
+            const evt = JSON.parse(raw)
+
+            if (evt.type === 'message') {
+              setMessages(prev => [...prev, { role: 'assistant', content: evt.content }])
+              if (evt.phase) setBackendPhase(evt.phase)
+
+            } else if (evt.type === 'curriculum_ready') {
+              if (evt.topic_id) setTopicId(evt.topic_id)
+              if (evt.roadmap_id) setRoadmapId(evt.roadmap_id)
+              if (evt.kc_graph?.length) {
+                // Wrap the flat KC list in a single sprint so the existing
+                // sidebar roadmap renders without structural changes.
+                const kcs: { id: string; title: string; status: string; order_index: number }[] = evt.kc_graph
+                setSprintPlan({
+                  topic: evt.topic_title || '',
+                  exit_condition: '',
+                  total_sprints: 1,
+                  total_hours: kcs.length,
+                  available_hours: kcs.length,
+                  sprints: [{
+                    sprint_number: 1,
+                    total_hours: kcs.length,
+                    cognitive_load: 0,
+                    concepts: kcs.map((kc, i) => ({
+                      id: kc.id,
+                      title: kc.title,
+                      description: '',
+                      why_needed: '',
+                      complexity: 0,
+                      estimated_hours: 1,
+                      prerequisites: [],
+                      requires_live_data: false,
+                      status: kc.status === 'mastered'
+                        ? 'done'
+                        : i === 0 ? 'current' : 'locked' as const,
+                    })),
+                  }],
+                  cut_nodes: [],
+                  cut_count: 0,
+                })
+                setPhase('gist')
+              }
+
+            } else if (evt.type === 'kc_graph') {
+              // Update per-KC status after validation or note generation.
+              if (evt.kc_graph?.length) {
+                const statusMap = new Map(
+                  evt.kc_graph.map((kc: { id: string; status: string }) => [kc.id, kc.status])
+                )
+                setSprintPlan(prev => {
+                  if (!prev) return prev
+                  return {
+                    ...prev,
+                    sprints: prev.sprints.map(s => ({
+                      ...s,
+                      concepts: s.concepts.map(c => ({
+                        ...c,
+                        status: statusMap.get(c.id) === 'mastered' ? 'done' : c.status,
+                      })),
+                    })),
+                  }
+                })
+              }
+
+            } else if (evt.type === 'validation_result') {
+              if (evt.next_phase) setBackendPhase(evt.next_phase)
+              if (phase !== 'learning') setPhase('learning')
+
+            } else if (evt.type === 'error') {
+              setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: evt.message || 'something went wrong, try again' },
+              ])
+            }
+            // 'done' type: no action needed — the reader loop ends naturally
+          } catch {
+            // skip malformed SSE events
+          }
         }
       }
-
-      if (newPhase === 'gist' && data.gist) {
-        setGist(data.gist)
-        setSprintPlan(data.sprint_plan)
-        setPhase('gist')
-        setMessages(prev => [...prev, {
-          role: 'assistant',
-          content: data.gist
-        }])
-      }
-
-      if (newPhase === 'planning' || newPhase === 'learning') {
-        if (phase !== 'learning') setPhase('learning')
-        if (data.reply) {
-          setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
-        }
-        if (data.current_concept_idx !== undefined) setCurrentConceptIdx(data.current_concept_idx)
-        if (data.current_sprint_idx !== undefined) setCurrentSprintIdx(data.current_sprint_idx)
-        if (data.concept_mastered) setSidebarTab('materials')
-        if (data.visual) setVisual(data.visual)
-        if (data.sprint_plan) setSprintPlan(data.sprint_plan)
-      }
-
-      if (newPhase === 'discovery' && data.reply) {
-        setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
-      }
-
     } catch {
       setMessages(prev => [...prev, { role: 'assistant', content: 'something went wrong, try again' }])
     } finally {
@@ -242,27 +303,12 @@ function TrekPageInner() {
   }
 
   // ── Approve roadmap ────────────────────────────────────────────────────────
-  const approveRoadmap = async () => {
-    setLoading(true)
-    try {
-      const data = await trekApi('message', {
-        session_id: sessionId,
-        user_id: userId,
-        message: 'approve',
-        roadmap_id: roadmapId || null,
-      })
-      setPhase('learning')
-      if (data.reply) {
-        setMessages([{ role: 'assistant', content: data.reply }])
-      }
-      if (data.opening_prompt) {
-        setMessages([{ role: 'assistant', content: data.opening_prompt }])
-      }
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: 'something went wrong, try again' }])
-    } finally {
-      setLoading(false)
-    }
+  // In the B2C pipeline, curriculum builds and teaching starts automatically
+  // when discovery completes — the first teaching question is already in chat
+  // by the time the user sees the gist view.  Approving just transitions the
+  // UI; no additional API call is required.
+  const approveRoadmap = () => {
+    setPhase('learning')
   }
 
   // ── Save notes ─────────────────────────────────────────────────────────────

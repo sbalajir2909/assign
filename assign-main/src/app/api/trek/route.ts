@@ -2,19 +2,6 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const TREK_API_URL = process.env.TREK_API_URL || 'http://127.0.0.1:8000'
 
-async function trekFetch(path: string, body: object) {
-  const res = await fetch(`${TREK_API_URL}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`trek-api ${res.status}: ${text}`)
-  }
-  return res.json()
-}
-
 export async function POST(req: NextRequest) {
   let body: {
     action?: string
@@ -22,6 +9,8 @@ export async function POST(req: NextRequest) {
     user_id?: string
     message?: string
     roadmap_id?: string
+    phase?: string
+    topic_id?: string
   } = {}
 
   try {
@@ -30,7 +19,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid json body' }, { status: 400 })
   }
 
-  const { action, session_id, user_id, message, roadmap_id } = body
+  const { action, session_id, user_id, message, roadmap_id, phase, topic_id } = body
 
   try {
     // ── Start new session ──────────────────────────────────────────────────
@@ -38,11 +27,20 @@ export async function POST(req: NextRequest) {
       if (!user_id) {
         return NextResponse.json({ error: 'user_id required' }, { status: 400 })
       }
-      const data = await trekFetch('/trek/session', { user_id })
+      const res = await fetch(`${TREK_API_URL}/api/b2c/session`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user_id }),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`trek-api ${res.status}: ${text}`)
+      }
+      const data = await res.json()
       return NextResponse.json(data)
     }
 
-    // ── Send message ───────────────────────────────────────────────────────
+    // ── Send message — streams SSE back to the browser ─────────────────────
     if (action === 'message') {
       if (!session_id || !user_id || !message) {
         return NextResponse.json(
@@ -50,13 +48,30 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         )
       }
-      const data = await trekFetch('/trek/message', {
-        session_id,
-        user_id,
-        message,
-        roadmap_id: roadmap_id || null,
+      const upstream = await fetch(`${TREK_API_URL}/api/b2c/message`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id,
+          user_id,
+          message,
+          phase: phase || 'discovery',
+          topic_id: topic_id || '',
+          roadmap_id: roadmap_id || null,
+        }),
       })
-      return NextResponse.json(data)
+      if (!upstream.ok) {
+        const text = await upstream.text()
+        throw new Error(`trek-api ${upstream.status}: ${text}`)
+      }
+      // Pass the SSE stream straight through — do not buffer or JSON-parse it.
+      return new Response(upstream.body, {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'X-Accel-Buffering': 'no',
+        },
+      })
     }
 
     return NextResponse.json({ error: 'invalid action' }, { status: 400 })
