@@ -90,3 +90,11 @@ class TrekStateB2C(TypedDict):
     discovery_messages: List[dict]
     discovery_complete: bool
     _discovery_profile: Optional[dict]
+
+    # Derived from interaction_log — updated after each validation.
+    # Injected into teaching agent prompt to adapt teaching style.
+    learning_style_hint: Optional[str]
+
+    # Extracted from uploaded syllabus (if any) — list of topic dicts.
+    # Set once at session start; never contains raw file data.
+    syllabus_topics: Optional[list]

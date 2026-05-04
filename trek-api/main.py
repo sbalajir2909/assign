@@ -68,10 +68,161 @@ app.add_middleware(
 )
 
 
+# ── Syllabus extraction ───────────────────────────────────────────────────────
+
+async def _extract_syllabus_topics(syllabus_base64: str, mime_type: str) -> Optional[list]:
+    """
+    Calls Cloudflare AI LLaVA to extract topic structure from an uploaded syllabus image.
+    Returns a list of topic dicts on success, None on any failure.
+    The raw file bytes are never stored — only the parsed JSON is returned.
+    """
+    import base64 as _b64
+    import httpx
+    import json as _json
+
+    cf_account = os.environ.get("CF_ACCOUNT_ID", "")
+    cf_token = os.environ.get("CF_API_TOKEN", "")
+    if not cf_account or not cf_token:
+        return None
+
+    url = (
+        f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
+        "/ai/run/@cf/llava-hf/llava-1.5-7b-hf"
+    )
+
+    try:
+        image_bytes = _b64.b64decode(syllabus_base64)
+        # LLaVA on Workers AI accepts the image as an array of uint8 byte values
+        image_array = list(image_bytes)
+    except Exception as exc:
+        print(f"[syllabus] base64 decode failed: {exc}")
+        return None
+
+    prompt = (
+        "Extract the list of topics, chapters, or learning objectives from this syllabus in order. "
+        'Return JSON only: {"topics": [{"title": "string", "subtopics": ["string"], "week_or_order": 1}]}'
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            resp = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {cf_token}",
+                    "Content-Type": "application/json",
+                },
+                json={"image": image_array, "prompt": prompt, "max_tokens": 1024},
+            )
+
+        if resp.status_code != 200:
+            print(f"[syllabus] CF AI returned {resp.status_code}: {resp.text[:300]}")
+            return None
+
+        body = resp.json()
+        if not body.get("success"):
+            print(f"[syllabus] CF AI not successful: {body.get('errors', [])}")
+            return None
+
+        result_text = (body.get("result") or {}).get("description", "") or ""
+
+        # Extract the JSON object from the model's response text
+        start = result_text.find("{")
+        end = result_text.rfind("}") + 1
+        if start >= 0 and end > start:
+            parsed = _json.loads(result_text[start:end])
+            topics = parsed.get("topics")
+            if topics and isinstance(topics, list):
+                print(f"[syllabus] Extracted {len(topics)} topic(s) from syllabus")
+                return topics
+
+        print(f"[syllabus] Could not parse topics from response: {result_text[:300]}")
+        return None
+
+    except Exception as exc:
+        print(f"[syllabus] Extraction error: {exc}")
+        return None
+
+
+# ── Learning profile helpers ──────────────────────────────────────────────────
+
+async def _derive_learning_style_hint(user_id: str, topic_id: str) -> Optional[str]:
+    """
+    Reads the last 20 interaction_log rows for (user, topic).
+    Returns a hint string describing the student's learning pattern, or None.
+    """
+    from db.client import supabase
+    try:
+        result = await supabase.table("interaction_log") \
+            .select("attempt_number, passed, explanation_text, force_advanced") \
+            .eq("user_id", user_id) \
+            .eq("topic_id", topic_id) \
+            .order("created_at", desc=True) \
+            .limit(20) \
+            .execute()
+        rows = result.data or []
+    except Exception as e:
+        print(f"[learning_profile] Failed to read interaction_log: {e}")
+        return None
+
+    if not rows:
+        return None
+
+    total = len(rows)
+    passed_on_1 = sum(1 for r in rows if r.get("attempt_number") == 1 and r.get("passed"))
+    passed_on_2 = sum(1 for r in rows if r.get("attempt_number") == 2 and r.get("passed"))
+    passed_late = sum(1 for r in rows if r.get("attempt_number", 0) >= 3 and r.get("passed"))
+    force_advanced = sum(1 for r in rows if r.get("force_advanced"))
+
+    # Keyword heuristics on explanation text
+    code_keywords = ("```", "def ", "for ", "if ", "import ", "print(", "->", "=>")
+    code_count = sum(
+        1 for r in rows
+        if any(kw in (r.get("explanation_text") or "") for kw in code_keywords)
+    )
+
+    # Classify
+    if (passed_on_1 + passed_on_2) >= max(total // 2, 1):
+        if code_count >= total // 3:
+            return "learns_fast_with_code"
+        return "learns_fast"
+    if passed_late >= total // 3 or force_advanced >= total // 4:
+        return "needs_repetition"
+    if code_count < total // 4:
+        return "needs_analogies"
+    return None
+
+
+async def _upsert_learning_profile(user_id: str, kc_title: str, flag_type: Optional[str]) -> None:
+    """Updates user_learning_profiles based on mastery outcome."""
+    if flag_type not in ("struggling", "strong"):
+        return
+    from db.client import supabase
+    try:
+        col = "weak_areas" if flag_type == "struggling" else "strong_areas"
+        existing = await supabase.table("user_learning_profiles") \
+            .select(col) \
+            .eq("user_id", user_id) \
+            .maybe_single() \
+            .execute()
+        current: list = []
+        if existing.data:
+            current = existing.data.get(col) or []
+        if kc_title not in current:
+            current.append(kc_title)
+        await supabase.table("user_learning_profiles").upsert(
+            {"user_id": user_id, col: current},
+            on_conflict="user_id",
+        ).execute()
+    except Exception as e:
+        print(f"[learning_profile] Failed to upsert {flag_type} area '{kc_title}': {e}")
+
+
 # ── B2C Endpoints ─────────────────────────────────────────────────────────────
 
 class B2CStartRequest(BaseModel):
     user_id: str
+    syllabus_base64: Optional[str] = None
+    syllabus_mime_type: Optional[str] = None
 
 class B2CTrekMessage(BaseModel):
     user_id: str
@@ -81,7 +232,7 @@ class B2CTrekMessage(BaseModel):
     phase: str  # current phase from frontend state
 
 
-def _b2c_initial_state(user_id: str, session_id: str) -> dict:
+def _b2c_initial_state(user_id: str, session_id: str, syllabus_topics: Optional[list] = None) -> dict:
     return {
         "user_id": user_id,
         "topic_id": "",
@@ -113,6 +264,8 @@ def _b2c_initial_state(user_id: str, session_id: str) -> dict:
         "discovery_messages": [],
         "discovery_complete": False,
         "_discovery_profile": None,
+        "learning_style_hint": None,
+        "syllabus_topics": syllabus_topics,
     }
 
 
@@ -122,13 +275,26 @@ async def b2c_start_session(req: B2CStartRequest):
     session_id = str(uuid.uuid4())
     config = {"configurable": {"thread_id": session_id}}
 
-    initial_state = _b2c_initial_state(req.user_id, session_id)
+    # Extract syllabus structure before creating the session.
+    # Raw bytes are never stored — only the parsed topic list.
+    syllabus_topics = None
+    if req.syllabus_base64:
+        print("[syllabus] Extracting topics from uploaded syllabus...")
+        syllabus_topics = await _extract_syllabus_topics(
+            req.syllabus_base64,
+            req.syllabus_mime_type or "image/png",
+        )
+        if not syllabus_topics:
+            print("[syllabus] Extraction failed — continuing without syllabus")
+
+    initial_state = _b2c_initial_state(req.user_id, session_id, syllabus_topics=syllabus_topics)
     result = await b2c_graph.ainvoke(initial_state, config=config)
 
     return {
         "session_id": session_id,
         "reply": result.get("pending_message", ""),
         "phase": result.get("phase", "discovery"),
+        "syllabus_extracted": syllabus_topics is not None,
     }
 
 
@@ -170,6 +336,25 @@ async def b2c_message(body: B2CTrekMessage):
 
                 from agents.mastery_validator import validate_explanation
                 patch, scores, flag_type = await validate_explanation(updated_state, llm_client)
+
+                # Derive learning style hint from interaction history and merge into patch.
+                hint = await _derive_learning_style_hint(
+                    updated_state["user_id"], updated_state["topic_id"]
+                )
+                if hint:
+                    patch["learning_style_hint"] = hint
+
+                # If KC was mastered/force-advanced, update the long-term profile.
+                if patch.get("last_passed") and flag_type in ("struggling", "strong"):
+                    kc = next(
+                        (k for k in updated_state["kc_graph"] if k.id == updated_state["current_kc_id"]),
+                        None,
+                    )
+                    if kc:
+                        await _upsert_learning_profile(
+                            updated_state["user_id"], kc.title, flag_type
+                        )
+
                 await b2c_graph.aupdate_state(config, patch)
 
                 yield f"data: {json.dumps({'type': 'validation_result', 'passed': patch.get('last_passed', False), 'score': round(patch.get('last_weighted_score', 0.0), 2), 'feedback': scores.get('feedback', ''), 'what_was_right': scores.get('what_was_right', ''), 'what_was_wrong': scores.get('what_was_wrong', ''), 'flag_type': flag_type, 'attempt_number': state.get('current_attempt_number', 1), 'next_phase': patch.get('phase', 'teaching')})}\n\n"

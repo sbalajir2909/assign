@@ -81,6 +81,12 @@ function TrekPageInner() {
   const [userNotes, setUserNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
 
+  // ── Syllabus upload ────────────────────────────────────────────────────────
+  const [showUploadZone, setShowUploadZone] = useState(false)
+  const [syllabusBase64, setSyllabusBase64] = useState('')
+  const [syllabusMimeType, setSyllabusMimeType] = useState('')
+  const [syllabusFilename, setSyllabusFilename] = useState('')
+
   // ── Chat pagination ────────────────────────────────────────────────────────
   const bottomRef = useRef<HTMLDivElement>(null)
   const chatContainerRef = useRef<HTMLDivElement>(null)
@@ -128,17 +134,23 @@ function TrekPageInner() {
         await loadRoadmap(resumeId)
         setResuming(false)
       } else {
-        await startSession(uid)
+        setShowUploadZone(true)
       }
     }
     init()
   }, [])
 
   // ── Start trek-api session ─────────────────────────────────────────────────
-  const startSession = async (uid: string) => {
+  const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
+    setShowUploadZone(false)
     setLoading(true)
     try {
-      const data = await trekApi('start', { user_id: uid })
+      const startBody: Record<string, string> = { user_id: uid }
+      if (syllabusB64) {
+        startBody.syllabus_base64 = syllabusB64
+        startBody.syllabus_mime_type = mimeType || 'image/png'
+      }
+      const data = await trekApi('start', startBody)
       setSessionId(data.session_id)
       if (data.phase) setBackendPhase(data.phase)
       setMessages([{ role: 'assistant', content: data.reply }])
@@ -147,6 +159,31 @@ function TrekPageInner() {
     } finally {
       setLoading(false)
     }
+  }
+
+  // ── Syllabus file handler ──────────────────────────────────────────────────
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 5 * 1024 * 1024) {
+      alert('file too large — max 5MB')
+      e.target.value = ''
+      return
+    }
+    setSyllabusFilename(file.name)
+    setSyllabusMimeType(file.type)
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      setSyllabusBase64(result.split(',')[1] ?? '')
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const removeSyllabus = () => {
+    setSyllabusFilename('')
+    setSyllabusBase64('')
+    setSyllabusMimeType('')
   }
 
   // ── Load existing roadmap ──────────────────────────────────────────────────
@@ -546,7 +583,51 @@ function TrekPageInner() {
           </div>
 
           <div ref={chatContainerRef} style={{ flex: 1, overflowY: 'auto', padding: '24px 0', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {messages.map((m, i) => (
+
+            {/* ── Syllabus upload zone — shown before session starts ── */}
+            {showUploadZone && (
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, padding: '40px 0' }}>
+                <div style={{ width: '100%', maxWidth: '480px' }}>
+                  {!syllabusFilename ? (
+                    <label
+                      htmlFor="syllabus-upload"
+                      style={{ display: 'block', border: '2px solid var(--border)', padding: '36px 28px', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '13px', color: 'var(--muted-foreground)', textAlign: 'center' as const, lineHeight: 1.6, transition: 'box-shadow 0.15s', userSelect: 'none' as const }}
+                      onMouseEnter={e => (e.currentTarget.style.boxShadow = '4px 4px 0 0 hsl(0 0% 10%)')}
+                      onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
+                    >
+                      got a syllabus? upload it for a course mapped to your topics
+                      <div style={{ marginTop: '10px', fontSize: '11px', opacity: 0.45 }}>PDF · PNG · JPG — max 5MB</div>
+                      <input id="syllabus-upload" type="file" accept=".pdf,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleFileSelect} />
+                    </label>
+                  ) : (
+                    <div style={{ border: '2px solid var(--border)', padding: '16px 20px', fontFamily: 'var(--font-mono)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 0 hsl(0 0% 10%)' }}>
+                      <span style={{ fontSize: '13px', color: 'var(--foreground)' }}>{syllabusFilename}</span>
+                      <button onClick={removeSyllabus} style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--muted-foreground)', padding: '0 0 0 16px' }}>remove</button>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '16px' }}>
+                    {syllabusFilename ? (
+                      <button
+                        className="ts"
+                        style={{ flex: 1 }}
+                        onClick={() => startSession(userId, syllabusBase64, syllabusMimeType)}
+                      >
+                        continue →
+                      </button>
+                    ) : <div />}
+                    <button
+                      onClick={() => startSession(userId)}
+                      style={{ background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--muted-foreground)', textDecoration: 'underline', padding: 0, marginLeft: syllabusFilename ? '20px' : 0 }}
+                    >
+                      skip
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {!showUploadZone && messages.map((m, i) => (
               <div key={i} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
                 <div style={{ maxWidth: '78%', padding: '12px 16px', fontSize: '14px', lineHeight: 1.65, whiteSpace: 'pre-wrap', borderRadius: '4px', border: '2px solid var(--border)', ...shadowSm, ...(m.role === 'user' ? { background: 'var(--foreground)', color: 'var(--background)' } : { background: 'var(--card)', color: 'var(--foreground)' }) }}>
                   {m.content}
@@ -581,7 +662,7 @@ function TrekPageInner() {
           </div>
 
           <div style={{ padding: '14px 0 28px', display: 'flex', gap: '10px' }}>
-            {phase === 'gist' ? (
+            {showUploadZone ? null : phase === 'gist' ? (
               <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '13px 18px', ...card }}>
                 <span style={{ ...mono, fontSize: '12px', color: 'var(--muted-foreground)' }}>review the course on the left, then approve to start</span>
               </div>

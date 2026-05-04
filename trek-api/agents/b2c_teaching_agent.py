@@ -92,12 +92,19 @@ async def run_teaching(state: dict, client) -> dict:
         )}]
         print(f"[teaching_agent] Injecting {len(prior_moments)} RAG chunk(s) into prompt")
 
+    # Learning style hint — derived from interaction_log history, written by main.py
+    style_note = ""
+    hint = state.get("learning_style_hint")
+    if hint:
+        style_note = f"\nThis student's learning pattern: {hint}. Adapt your teaching style accordingly."
+
     # Per-attempt task instruction — tells the LLM exactly what to produce.
     if attempt == 1:
         task_instruction = (
             f"Concept: {kc.title}\n"
             f"Description: {kc.description}\n"
-            f"{misconception_note}\n\n"
+            f"{misconception_note}"
+            f"{style_note}\n\n"
             "This is the student's first time seeing this concept. "
             "Follow the ATTEMPT 1 rules: probe question first, brief explanation, under 60 words."
         )
@@ -105,7 +112,8 @@ async def run_teaching(state: dict, client) -> dict:
         task_instruction = (
             f"Concept: {kc.title}\n"
             f"{reattempt_context}"
-            f"{misconception_note}\n\n"
+            f"{misconception_note}"
+            f"{style_note}\n\n"
             f"Follow the ATTEMPT {attempt} rules. "
             "Address only the gap. Do not re-explain the full concept. "
             "Choose an analogy not yet used in this conversation."

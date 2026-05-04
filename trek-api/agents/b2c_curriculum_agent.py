@@ -139,6 +139,10 @@ async def run_b2c_curriculum(state: dict) -> dict:
             "available_hours": 12.0,  # 4 weeks × 3 hrs default
         }
 
+    syllabus_topics = state.get("syllabus_topics")
+    if syllabus_topics:
+        curriculum_profile["syllabus_topics"] = syllabus_topics
+
     result = await run_curriculum(curriculum_profile)
 
     if result.get("error") or not result.get("validated_nodes"):

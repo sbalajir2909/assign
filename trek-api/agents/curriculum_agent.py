@@ -84,6 +84,16 @@ async def run_curriculum(learner_profile: dict) -> dict:
     knowledge_baseline = learner_profile["knowledge_baseline"]
     available_hours = learner_profile["available_hours"]
 
+    # Syllabus override — if the student uploaded a syllabus, lock topic order
+    syllabus_topics = learner_profile.get("syllabus_topics")
+    if syllabus_topics:
+        topics_str = json.dumps(syllabus_topics)
+        exit_condition = (
+            "The student has provided their syllabus. Generate KCs that map directly to these topics "
+            f"in this order: {topics_str}. Use Tavily to find content for each topic but follow the "
+            "syllabus structure for KC titles and ordering. " + exit_condition
+        )
+
     # ── Step 1: Search ──────────────────────────────────────────
     print(f"[curriculum] searching for: {topic}")
     search_data = await run_search(topic, exit_condition)
@@ -158,6 +168,9 @@ async def run_curriculum(learner_profile: dict) -> dict:
     # ── Step 6: Gist ──────────────────────────────────────────────
     print("[curriculum] generating course preview...")
     gist = await generate_gist(learner_profile, sprint_plan)
+
+    if syllabus_topics:
+        gist = "course mapped to your syllabus — " + gist
 
     return {
         "sprint_plan": sprint_plan,

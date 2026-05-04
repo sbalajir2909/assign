@@ -11,6 +11,8 @@ export async function POST(req: NextRequest) {
     roadmap_id?: string
     phase?: string
     topic_id?: string
+    syllabus_base64?: string
+    syllabus_mime_type?: string
   } = {}
 
   try {
@@ -19,7 +21,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid json body' }, { status: 400 })
   }
 
-  const { action, session_id, user_id, message, roadmap_id, phase, topic_id } = body
+  const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type } = body
 
   try {
     // ── Start new session ──────────────────────────────────────────────────
@@ -27,10 +29,14 @@ export async function POST(req: NextRequest) {
       if (!user_id) {
         return NextResponse.json({ error: 'user_id required' }, { status: 400 })
       }
+      const sessionPayload: Record<string, string> = { user_id: user_id! }
+      if (syllabus_base64) sessionPayload.syllabus_base64 = syllabus_base64
+      if (syllabus_mime_type) sessionPayload.syllabus_mime_type = syllabus_mime_type
+
       const res = await fetch(`${TREK_API_URL}/api/b2c/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user_id }),
+        body: JSON.stringify(sessionPayload),
       })
       if (!res.ok) {
         const text = await res.text()
