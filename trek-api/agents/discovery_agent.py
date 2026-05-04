@@ -1,6 +1,20 @@
 import json
 from utils.model_router import complete
 
+TOPIC_QUESTION = "What do you want to learn?"
+PRIOR_QUESTION = (
+    "What do you already know about this? List anything relevant — "
+    "concepts, tools, experience — even if it feels basic."
+)
+GOAL_QUESTION = (
+    "What's your goal? For example: pass an exam, build a specific "
+    "project, understand it deeply, get a job, or something else."
+)
+TIMELINE_QUESTION = (
+    "What's your timeline? For example: exam in 2 weeks, want to finish "
+    "in a month, no deadline just want to go deep."
+)
+
 DISCOVERY_SYSTEM = """
 You are Assign's discovery agent. Before any course is built, you collect exactly
 four pieces of information — one at a time, in order. No more, no less.
@@ -54,6 +68,28 @@ weeks_available must be an integer — default 4 if their answer was vague.
 """
 
 
+def _sanitize_reply(text: str) -> str:
+    clean = (text or "").replace("[After user responds]", "").strip()
+    return clean or TIMELINE_QUESTION
+
+
+def _question_was_asked(messages: list[dict], prefix: str) -> bool:
+    prefix_lower = prefix.lower()
+    for message in messages:
+        if message.get("role") != "assistant":
+            continue
+        if message.get("content", "").strip().lower().startswith(prefix_lower):
+            return True
+    return False
+
+
+def _can_finish_discovery(messages: list[dict]) -> bool:
+    # The final timeline answer can only arrive after the timeline question has
+    # already been sent in a previous assistant turn. This prevents the model
+    # from hallucinating completion one step too early.
+    return _question_was_asked(messages, "What's your timeline?")
+
+
 async def run_discovery(messages: list[dict]) -> dict:
     """
     Main discovery function.
@@ -66,13 +102,13 @@ async def run_discovery(messages: list[dict]) -> dict:
             *messages,
         ],
         model_size="large",
-        temperature=0.7,
+        temperature=0.2,
         max_tokens=500,
     )
 
     if "[DISCOVERY_COMPLETE]" in response:
         parts = response.split("[DISCOVERY_COMPLETE]")
-        closing_message = parts[0].strip()
+        closing_message = _sanitize_reply(parts[0])
 
         try:
             json_str = parts[1].strip()
@@ -85,6 +121,14 @@ async def run_discovery(messages: list[dict]) -> dict:
         except (json.JSONDecodeError, IndexError):
             learner_profile = None
 
+        if not _can_finish_discovery(messages):
+            return {
+                "phase": "discovery",
+                "reply": TIMELINE_QUESTION,
+                "learner_profile": None,
+                "discovery_complete": False,
+            }
+
         return {
             "phase": "complete",
             "reply": closing_message or "got everything i need — building your course now.",
@@ -94,7 +138,7 @@ async def run_discovery(messages: list[dict]) -> dict:
 
     return {
         "phase": "discovery",
-        "reply": response,
+        "reply": _sanitize_reply(response),
         "learner_profile": None,
         "discovery_complete": False,
     }

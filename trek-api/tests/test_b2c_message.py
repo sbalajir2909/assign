@@ -25,6 +25,16 @@ class FakeGraph:
         return self._result
 
 
+class SequencedFakeGraph(FakeGraph):
+    def __init__(self, state, results):
+        super().__init__(state=state, result={})
+        self._results = list(results)
+
+    async def ainvoke(self, patch, config=None):
+        self.invoked.append((config, patch))
+        return self._results.pop(0)
+
+
 async def _read_stream(response) -> str:
     chunks = []
     async for chunk in response.body_iterator:
@@ -121,7 +131,91 @@ async def test_b2c_message_allows_curriculum_build_without_current_kc(monkeypatc
     assert fake_graph.invoked == [
         (
             {"configurable": {"thread_id": "session-1"}},
-            {},
+            {"recent_turns": [{"role": "user", "content": "let's learn"}]},
         )
     ]
     assert "Here's your first concept." in stream
+
+
+@pytest.mark.asyncio
+async def test_b2c_message_auto_runs_curriculum_after_discovery(monkeypatch):
+    state = {
+        "phase": "discovery",
+        "user_id": "user-1",
+        "topic_id": "",
+        "discovery_messages": [
+            {"role": "assistant", "content": "What's your timeline?"},
+        ],
+    }
+    fake_graph = SequencedFakeGraph(
+        state=state,
+        results=[
+            {
+                "pending_message": "Discovery complete.",
+                "phase": "curriculum_build",
+            },
+            {
+                "pending_message": "Let's start with Flask routes.",
+                "phase": "awaiting_explanation",
+                "topic_id": "topic-1",
+                "topic_title": "Flask web development",
+                "roadmap_id": "roadmap-1",
+                "current_kc_id": "kc-1",
+                "bkt_state": {"kc-1": 0.0},
+                "kc_graph": [
+                    SimpleNamespace(
+                        id="kc-1",
+                        title="Flask routes",
+                        status="current",
+                        order_index=0,
+                    )
+                ],
+            },
+        ],
+    )
+
+    async def fake_route_intent(message, phase, llm_client):
+        return "other"
+
+    persisted = []
+
+    async def fake_persist(*args):
+        persisted.append(args)
+
+    monkeypatch.setattr(main, "b2c_graph", fake_graph)
+    monkeypatch.setattr(main, "_persist_b2c_chat_turn", fake_persist)
+    monkeypatch.setattr("utils.semantic_router.route_intent", fake_route_intent)
+    monkeypatch.setattr("utils.model_router.get_llm_client", lambda: object())
+
+    response = await main.b2c_message(
+        B2CTrekMessage(
+            user_id="user-1",
+            topic_id="",
+            session_id="session-1",
+            message="no deadline",
+            phase="discovery",
+        )
+    )
+    stream = await _read_stream(response)
+
+    assert fake_graph.invoked == [
+        (
+            {"configurable": {"thread_id": "session-1"}},
+            {
+                "discovery_messages": [
+                    {"role": "assistant", "content": "What's your timeline?"},
+                    {"role": "user", "content": "no deadline"},
+                ]
+            },
+        ),
+        (
+            {"configurable": {"thread_id": "session-1"}},
+            None,
+        ),
+    ]
+    assert persisted == [
+        ("user-1", "topic-1", "kc-1", "assistant", "Let's start with Flask routes."),
+    ]
+    assert "Discovery complete." in stream
+    assert "Let's start with Flask routes." in stream
+    assert '"type": "curriculum_ready"' in stream

@@ -88,6 +88,7 @@ function TrekPageInner() {
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [resuming, setResuming] = useState(false)
+  const [authError, setAuthError] = useState('')
 
   // ── Course state ───────────────────────────────────────────────────────────
   const [sprintPlan, setSprintPlan] = useState<SprintPlan | null>(null)
@@ -201,7 +202,24 @@ function TrekPageInner() {
   useEffect(() => {
     const init = async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      const uid = session?.user?.id || 'anonymous'
+      let uid = session?.user?.id || ''
+
+      if (!uid) {
+        const { data, error } = await supabase.auth.signInAnonymously()
+        if (error) {
+          console.error('[trek] anonymous sign-in failed', error)
+        }
+        uid = data.user?.id || ''
+      }
+
+      if (!uid) {
+        setAuthError('sign in to start trek — anonymous session setup failed.')
+        setMessages([{ role: 'assistant', content: 'sign in to start trek — anonymous session setup failed.' }])
+        setShowUploadZone(false)
+        return
+      }
+
+      setAuthError('')
       setUserId(uid)
 
       const resumeId = searchParams.get('resume')
@@ -218,6 +236,11 @@ function TrekPageInner() {
 
   // ── Start trek-api session ─────────────────────────────────────────────────
   const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
+    if (!uid) {
+      setAuthError('sign in to start trek — there is no active user session.')
+      setMessages([{ role: 'assistant', content: 'sign in to start trek — there is no active user session.' }])
+      return
+    }
     setShowUploadZone(false)
     setLoading(true)
     try {
@@ -835,6 +858,16 @@ function TrekPageInner() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {!showUploadZone && authError && (
+              <div style={{ ...card, ...shadowSm, maxWidth: '520px', padding: '16px', marginBottom: '10px' }}>
+                <p style={{ ...label, marginBottom: '8px' }}>authentication required</p>
+                <p style={{ ...mono, fontSize: '12px', lineHeight: 1.7, color: 'var(--muted-foreground)', marginBottom: '12px' }}>{authError}</p>
+                <Link href="/login" style={{ ...mono, fontSize: '12px', color: 'var(--foreground)', textDecoration: 'underline' }}>
+                  go to login →
+                </Link>
               </div>
             )}
 

@@ -2,12 +2,27 @@ import { NextRequest } from 'next/server'
 
 export const dynamic = 'force-dynamic'
 
-const TREK_API_URL = process.env.TREK_API_URL || 'http://127.0.0.1:8000'
+function getTrekApiUrl() {
+  const explicitUrl =
+    process.env.TREK_API_URL ||
+    process.env.NEXT_PUBLIC_TREK_API_URL
+
+  if (explicitUrl) {
+    return explicitUrl.replace(/\/$/, '')
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    return 'http://127.0.0.1:8000'
+  }
+
+  throw new Error('TREK_API_URL is not configured for production')
+}
 
 async function proxy(req: NextRequest, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params
+  const trekApiUrl = getTrekApiUrl()
   const upstreamUrl = new URL(
-    `${TREK_API_URL.replace(/\/$/, '')}/api/b2c/${path.map(encodeURIComponent).join('/')}`
+    `${trekApiUrl}/api/b2c/${path.map(encodeURIComponent).join('/')}`
   )
   upstreamUrl.search = req.nextUrl.search
 

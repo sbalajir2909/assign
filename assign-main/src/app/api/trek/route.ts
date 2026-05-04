@@ -1,6 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const TREK_API_URL = process.env.TREK_API_URL || 'http://127.0.0.1:8000'
+function getTrekApiUrl() {
+  const explicitUrl =
+    process.env.TREK_API_URL ||
+    process.env.NEXT_PUBLIC_TREK_API_URL
+
+  if (explicitUrl) {
+    return explicitUrl.replace(/\/$/, '')
+  }
+
+  if (process.env.NODE_ENV !== 'production') {
+    return 'http://127.0.0.1:8000'
+  }
+
+  throw new Error('TREK_API_URL is not configured for production')
+}
 
 export async function POST(req: NextRequest) {
   let body: {
@@ -25,6 +39,7 @@ export async function POST(req: NextRequest) {
   const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type, review_kc_id } = body
 
   try {
+    const trekApiUrl = getTrekApiUrl()
     // ── Start new session ──────────────────────────────────────────────────
     if (action === 'start') {
       if (!user_id) {
@@ -35,7 +50,7 @@ export async function POST(req: NextRequest) {
       if (syllabus_mime_type) sessionPayload.syllabus_mime_type = syllabus_mime_type
       if (review_kc_id) sessionPayload.review_kc_id = review_kc_id
 
-      const res = await fetch(`${TREK_API_URL}/api/b2c/session`, {
+      const res = await fetch(`${trekApiUrl}/api/b2c/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(sessionPayload),
@@ -56,7 +71,7 @@ export async function POST(req: NextRequest) {
           { status: 400 }
         )
       }
-      const upstream = await fetch(`${TREK_API_URL}/api/b2c/message`, {
+      const upstream = await fetch(`${trekApiUrl}/api/b2c/message`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -100,8 +115,9 @@ export async function GET(req: NextRequest) {
   const sessionId = searchParams.get('sessionId') || searchParams.get('session_id')
 
   try {
+    const trekApiUrl = getTrekApiUrl()
     if (action === 'review' && userId) {
-      const res = await fetch(`${TREK_API_URL}/api/b2c/review/${userId}`)
+      const res = await fetch(`${trekApiUrl}/api/b2c/review/${userId}`)
       if (!res.ok) {
         const text = await res.text()
         throw new Error(`trek-api ${res.status}: ${text}`)
@@ -111,7 +127,7 @@ export async function GET(req: NextRequest) {
     }
 
     if (action === 'report' && sessionId) {
-      const res = await fetch(`${TREK_API_URL}/api/b2c/report/${sessionId}`)
+      const res = await fetch(`${trekApiUrl}/api/b2c/report/${sessionId}`)
       if (!res.ok) {
         const text = await res.text()
         throw new Error(`trek-api ${res.status}: ${text}`)

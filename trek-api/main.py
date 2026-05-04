@@ -788,10 +788,12 @@ async def b2c_message(body: B2CTrekMessage):
                             body.message,
                         )
                 else:
-                    # curriculum_build and other pre-KC phases can be advanced by
-                    # a user nudge ("let's learn") but do not yet have a KC to
-                    # attach chat-history turns to.
-                    patch = {}
+                    # curriculum_build and other pre-KC phases still need a
+                    # concrete state write for LangGraph and benefit from
+                    # preserving the user's nudge / timeline answer in memory.
+                    recent = list(state.get("recent_turns", []))
+                    recent.append({"role": "user", "content": body.message})
+                    patch["recent_turns"] = recent[-6:]
 
                 # For discovery, persist the appended user turn, but also pass
                 # it into ainvoke so this run sees it even with PostgresSaver.
@@ -807,6 +809,22 @@ async def b2c_message(body: B2CTrekMessage):
                             result["pending_message"],
                         )
                     yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', phase)})}\n\n"
+
+                # Discovery should hand off straight into curriculum build and
+                # the opening teaching turn. The frontend already expects the
+                # roadmap + first prompt without needing a manual extra nudge.
+                if result.get("phase") == "curriculum_build" and not result.get("kc_graph"):
+                    result = await b2c_graph.ainvoke(None, config=config)
+                    if result.get("pending_message"):
+                        if result.get("current_kc_id") and result.get("phase") in ("teaching", "awaiting_explanation"):
+                            await _persist_b2c_chat_turn(
+                                state["user_id"],
+                                result.get("topic_id", state.get("topic_id")),
+                                result.get("current_kc_id"),
+                                "assistant",
+                                result["pending_message"],
+                            )
+                        yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', 'awaiting_explanation')})}\n\n"
 
                 if result.get("kc_graph"):
                     kc_summary = [
