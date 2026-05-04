@@ -11,8 +11,10 @@ Profile mapping:
 """
 
 import uuid
+from datetime import datetime, timezone
 from agents.curriculum_agent import run_curriculum
 from graph.b2c_state import KCNode
+from utils.sm2 import update_sm2
 from db.client import supabase
 from db.roadmaps import save_roadmap
 
@@ -202,7 +204,7 @@ async def run_b2c_curriculum(state: dict) -> dict:
             print(f"[b2c_curriculum] Failed to store KC '{kc.title}': {e}")
 
         try:
-            await supabase.table("student_kc_state").insert({
+            kc_state_payload = {
                 "user_id": user_id,
                 "kc_id": kc.id,
                 "topic_id": topic_id,
@@ -210,7 +212,24 @@ async def run_b2c_curriculum(state: dict) -> dict:
                 "p_learned": 0.9 if is_pre_known else 0.0,
                 "p_l0":      0.9 if is_pre_known else 0.1,
                 "status":    "mastered" if is_pre_known else "not_started",
-            }).execute()
+            }
+            if is_pre_known:
+                # Self-reported prior knowledge is conservative evidence of
+                # mastery, so seed an immediate 1-day review schedule.
+                (
+                    sm2_easiness,
+                    sm2_interval,
+                    sm2_repetitions,
+                    next_review,
+                ) = update_sm2(2.5, 1, 0, 3)
+                kc_state_payload.update({
+                    "sm2_easiness": sm2_easiness,
+                    "sm2_interval": sm2_interval,
+                    "sm2_repetitions": sm2_repetitions,
+                    "sm2_next_review": next_review.isoformat(),
+                    "last_studied_at": datetime.now(timezone.utc).isoformat(),
+                })
+            await supabase.table("student_kc_state").insert(kc_state_payload).execute()
         except Exception as e:
             print(f"[b2c_curriculum] Failed to create KC state for '{kc.title}': {e}")
 

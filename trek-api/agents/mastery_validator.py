@@ -110,8 +110,40 @@ _BKT_DEFAULTS = {
 }
 
 
-async def _load_bkt_row(user_id: str, kc_id: str) -> dict:
-    """Fetches BKT state for (user, KC). Returns defaults if no row exists."""
+def _with_default(value, default):
+    return default if value is None else value
+
+
+async def _ensure_bkt_row(user_id: str, kc_id: str, topic_id: str) -> None:
+    """
+    Seeds student_kc_state with defaults when the KC row does not exist yet.
+    This protects first-attempt production writes from silently skipping the
+    SM-2 update path.
+    """
+    try:
+        await supabase.table("student_kc_state").upsert({
+            "user_id": user_id,
+            "kc_id": kc_id,
+            "topic_id": topic_id,
+            "p_learned": _BKT_DEFAULTS["p_learned"],
+            "p_l0": _BKT_DEFAULTS["p_learned"],
+            "p_transit": _BKT_DEFAULTS["p_transit"],
+            "p_slip": _BKT_DEFAULTS["p_slip"],
+            "p_guess": _BKT_DEFAULTS["p_guess"],
+            "attempt_count": _BKT_DEFAULTS["attempt_count"],
+            "status": "not_started",
+            "sm2_easiness": _BKT_DEFAULTS["sm2_easiness"],
+            "sm2_interval": _BKT_DEFAULTS["sm2_interval"],
+            "sm2_repetitions": _BKT_DEFAULTS["sm2_repetitions"],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }, on_conflict="user_id,kc_id").execute()
+        print(f"[mastery_validator] seeded default kc state for kc={kc_id}")
+    except Exception as e:
+        print(f"[mastery_validator] Failed to seed default kc state for kc={kc_id}: {e}")
+
+
+async def _load_bkt_row(user_id: str, kc_id: str, topic_id: str) -> dict:
+    """Fetches BKT state for (user, KC). Seeds defaults if no row exists."""
     try:
         result = await supabase.table("student_kc_state") \
             .select(
@@ -124,17 +156,19 @@ async def _load_bkt_row(user_id: str, kc_id: str) -> dict:
             .execute()
         if result.data:
             return {
-                "p_learned": result.data.get("p_learned", _BKT_DEFAULTS["p_learned"]),
-                "p_transit": result.data.get("p_transit", _BKT_DEFAULTS["p_transit"]),
-                "p_slip":    result.data.get("p_slip",    _BKT_DEFAULTS["p_slip"]),
-                "p_guess":   result.data.get("p_guess",   _BKT_DEFAULTS["p_guess"]),
-                "attempt_count": result.data.get("attempt_count", 0),
-                "sm2_easiness": result.data.get("sm2_easiness", _BKT_DEFAULTS["sm2_easiness"]),
-                "sm2_interval": result.data.get("sm2_interval", _BKT_DEFAULTS["sm2_interval"]),
-                "sm2_repetitions": result.data.get("sm2_repetitions", _BKT_DEFAULTS["sm2_repetitions"]),
+                "p_learned": _with_default(result.data.get("p_learned"), _BKT_DEFAULTS["p_learned"]),
+                "p_transit": _with_default(result.data.get("p_transit"), _BKT_DEFAULTS["p_transit"]),
+                "p_slip":    _with_default(result.data.get("p_slip"),    _BKT_DEFAULTS["p_slip"]),
+                "p_guess":   _with_default(result.data.get("p_guess"),   _BKT_DEFAULTS["p_guess"]),
+                "attempt_count": _with_default(result.data.get("attempt_count"), 0),
+                "sm2_easiness": _with_default(result.data.get("sm2_easiness"), _BKT_DEFAULTS["sm2_easiness"]),
+                "sm2_interval": _with_default(result.data.get("sm2_interval"), _BKT_DEFAULTS["sm2_interval"]),
+                "sm2_repetitions": _with_default(result.data.get("sm2_repetitions"), _BKT_DEFAULTS["sm2_repetitions"]),
             }
     except Exception as e:
         print(f"[mastery_validator] Failed to load BKT state for kc={kc_id}: {e}")
+
+    await _ensure_bkt_row(user_id, kc_id, topic_id)
     return dict(_BKT_DEFAULTS)
 
 
@@ -187,6 +221,10 @@ async def _upsert_bkt_row(
     }
     if sm2_update:
         new_easiness, new_interval, new_repetitions, next_review_iso = sm2_update
+        print(
+            f"[sm2] writing review for kc={kc_id} "
+            f"next_review={next_review_iso} interval={new_interval}"
+        )
         payload.update({
             "sm2_easiness": new_easiness,
             "sm2_interval": new_interval,
@@ -198,6 +236,11 @@ async def _upsert_bkt_row(
             payload,
             on_conflict="user_id,kc_id",
         ).execute()
+        if sm2_update:
+            print(
+                f"[sm2] wrote review for kc={kc_id} "
+                f"next_review={payload['sm2_next_review']} interval={payload['sm2_interval']}"
+            )
     except Exception as e:
         print(f"[mastery_validator] Failed to persist BKT state for kc={kc_id}: {e}")
 
@@ -252,7 +295,7 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
     scores["weighted_score"] = round(weighted, 4)
 
     # ── Step 2: BKT update ────────────────────────────────────────────────────
-    bkt_row = await _load_bkt_row(user_id, kc_id)
+    bkt_row = await _load_bkt_row(user_id, kc_id, topic_id)
     bkt_before = bkt_row["p_learned"]
 
     # Binary correct signal: rubric score >= 0.65
