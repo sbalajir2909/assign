@@ -11,7 +11,6 @@ Priority order (700 token budget, strict):
 5. Relevant semantic memory (analogies that worked) — ~100 tokens
 """
 
-import asyncio
 from utils.embeddings import embed_text
 from db.client import supabase
 
@@ -123,7 +122,7 @@ async def build_context(state: dict) -> dict:
     if kc and user_id:
         try:
             query_text = f"{kc.title}: {kc.description}" if kc.description else kc.title
-            query_vec = await asyncio.to_thread(embed_text, query_text)
+            query_vec = await embed_text(query_text)
             rag_result = await supabase.rpc("match_concept_chunks", {
                 "query_embedding": query_vec,
                 "match_user_id": user_id,

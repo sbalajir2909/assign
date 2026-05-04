@@ -13,7 +13,6 @@ Note structure:
 - full_text: concatenated plain text for search and context loading
 """
 
-import asyncio
 import json
 from utils.model_router import get_model_name
 from utils.embeddings import embed_text
@@ -134,7 +133,7 @@ async def generate_note(state: dict, client) -> dict:
         + "\n".join(f"- {p}" for p in note_data["key_points"])
     )
     try:
-        summary_vec = await asyncio.to_thread(embed_text, summary_text)
+        summary_vec = await embed_text(summary_text)
         await supabase.table("concept_rag_chunks").insert({
             **_rag_base,
             "content": summary_text,
@@ -148,7 +147,7 @@ async def generate_note(state: dict, client) -> dict:
     analogy = note_data.get("student_analogy", "")
     if analogy:
         try:
-            analogy_vec = await asyncio.to_thread(embed_text, analogy)
+            analogy_vec = await embed_text(analogy)
             await supabase.table("concept_rag_chunks").insert({
                 **_rag_base,
                 "content": analogy,

@@ -20,6 +20,8 @@ _REQUIRED_ENV_VARS = [
     "SUPABASE_SERVICE_ROLE_KEY",
     "TAVILY_API_KEY",
     "DATABASE_URL",
+    "CF_ACCOUNT_ID",
+    "CF_API_TOKEN",
 ]
 
 def _check_required_env_vars() -> None:
