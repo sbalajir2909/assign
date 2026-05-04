@@ -14,7 +14,11 @@ async def run_b2c_discovery(state: dict) -> dict:
     Returns state patch.
     """
     messages = state.get("discovery_messages", [])
-    result = await run_discovery(messages)
+    result = await run_discovery(
+        messages,
+        syllabus_topics=state.get("syllabus_topics"),
+        syllabus_course_title=state.get("syllabus_course_title"),
+    )
 
     updates: dict = {
         "discovery_messages": messages + [

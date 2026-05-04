@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from utils.model_router import complete
 
 
 # ── Startup env-var validation ────────────────────────────────────────────────
@@ -72,15 +73,142 @@ app.add_middleware(
 
 # ── Syllabus extraction ───────────────────────────────────────────────────────
 
-async def _extract_syllabus_topics(syllabus_base64: str, mime_type: str) -> Optional[list]:
-    """
-    Calls Cloudflare AI LLaVA to extract topic structure from an uploaded syllabus image.
-    Returns a list of topic dicts on success, None on any failure.
-    The raw file bytes are never stored — only the parsed JSON is returned.
-    """
-    import base64 as _b64
+_SYLLABUS_TEXT_SYSTEM = """
+You extract a clean course/topic structure from uploaded study materials.
+
+Return JSON only in this exact shape:
+{
+  "course_title": "overall course or subject title",
+  "topics": [
+    {"title": "topic name", "subtopics": ["subtopic"], "week_or_order": 1}
+  ]
+}
+
+Rules:
+- course_title should be the overall subject, not a random section heading
+- topics must be ordered
+- remove admin boilerplate, grading policies, dates, and logistics
+- if the material is mostly one topic, still return a sensible course_title and at least one topic
+- prefer concrete learning units, not vague buckets like "introduction" unless that is truly the heading
+"""
+
+
+def _normalize_syllabus_structure(parsed: object) -> Optional[dict]:
+    if not isinstance(parsed, dict):
+        return None
+
+    course_title = str(parsed.get("course_title", "")).strip()
+    raw_topics = parsed.get("topics")
+    if not isinstance(raw_topics, list):
+        return None
+
+    topics: list[dict] = []
+    for index, topic in enumerate(raw_topics, start=1):
+        if isinstance(topic, dict):
+            title = str(topic.get("title", "")).strip()
+            subtopics = topic.get("subtopics")
+            week_or_order = topic.get("week_or_order", index)
+        else:
+            title = str(topic).strip()
+            subtopics = []
+            week_or_order = index
+
+        if not title:
+            continue
+
+        normalized_subtopics = [
+            str(item).strip()
+            for item in (subtopics if isinstance(subtopics, list) else [])
+            if str(item).strip()
+        ]
+
+        try:
+            normalized_order = int(week_or_order)
+        except Exception:
+            normalized_order = index
+
+        topics.append({
+            "title": title,
+            "subtopics": normalized_subtopics,
+            "week_or_order": normalized_order,
+        })
+
+    if not topics:
+        return None
+
+    if not course_title:
+        course_title = topics[0]["title"]
+
+    return {
+        "course_title": course_title,
+        "topics": topics,
+    }
+
+
+async def _extract_syllabus_structure_from_text(
+    raw_text: str,
+    filename: str = "",
+) -> Optional[dict]:
+    text = (raw_text or "").strip()
+    if not text:
+        return None
+
+    trimmed_text = text[:18000]
+    response = await complete(
+        messages=[
+            {"role": "system", "content": _SYLLABUS_TEXT_SYSTEM},
+            {"role": "user", "content": (
+                f"Filename: {filename or 'unknown'}\n\n"
+                "Extract the course title and ordered topics from this uploaded material.\n\n"
+                f"Document text:\n{trimmed_text}"
+            )},
+        ],
+        model_size="large",
+        temperature=0.1,
+        max_tokens=1200,
+        json_mode=True,
+    )
+
+    try:
+        parsed = json.loads(response)
+    except json.JSONDecodeError:
+        print(f"[syllabus] text parse returned invalid JSON: {response[:300]}")
+        return None
+
+    return _normalize_syllabus_structure(parsed)
+
+
+def _extract_text_from_pdf_bytes(file_bytes: bytes) -> str:
+    from io import BytesIO
+    from pypdf import PdfReader
+
+    reader = PdfReader(BytesIO(file_bytes))
+    chunks: list[str] = []
+    for page in reader.pages[:20]:
+        page_text = (page.extract_text() or "").strip()
+        if page_text:
+            chunks.append(page_text)
+    return "\n\n".join(chunks)
+
+
+def _extract_text_from_upload(file_bytes: bytes, mime_type: str, filename: str = "") -> str:
+    lowered_mime = (mime_type or "").lower()
+    lowered_name = (filename or "").lower()
+
+    if "pdf" in lowered_mime or lowered_name.endswith(".pdf"):
+        return _extract_text_from_pdf_bytes(file_bytes)
+
+    if lowered_mime.startswith("text/") or lowered_name.endswith((".txt", ".md", ".markdown")):
+        return file_bytes.decode("utf-8", errors="ignore")
+
+    return ""
+
+
+async def _extract_syllabus_structure_from_image(
+    file_bytes: bytes,
+    filename: str = "",
+) -> Optional[dict]:
     import httpx
-    import json as _json
 
     cf_account = os.environ.get("CF_ACCOUNT_ID", "")
     cf_token = os.environ.get("CF_API_TOKEN", "")
@@ -91,18 +219,11 @@ async def _extract_syllabus_topics(syllabus_base64: str, mime_type: str) -> Opti
         f"https://api.cloudflare.com/client/v4/accounts/{cf_account}"
         "/ai/run/@cf/llava-hf/llava-1.5-7b-hf"
     )
-
-    try:
-        image_bytes = _b64.b64decode(syllabus_base64)
-        # LLaVA on Workers AI accepts the image as an array of uint8 byte values
-        image_array = list(image_bytes)
-    except Exception as exc:
-        print(f"[syllabus] base64 decode failed: {exc}")
-        return None
-
+    image_array = list(file_bytes)
     prompt = (
-        "Extract the list of topics, chapters, or learning objectives from this syllabus in order. "
-        'Return JSON only: {"topics": [{"title": "string", "subtopics": ["string"], "week_or_order": 1}]}'
+        "Read this syllabus, course outline, or study document image and extract the overall course title "
+        "plus the ordered list of topics, chapters, or learning objectives. "
+        'Return JSON only: {"course_title": "string", "topics": [{"title": "string", "subtopics": ["string"], "week_or_order": 1}]}'
     )
 
     try:
@@ -113,7 +234,7 @@ async def _extract_syllabus_topics(syllabus_base64: str, mime_type: str) -> Opti
                     "Authorization": f"Bearer {cf_token}",
                     "Content-Type": "application/json",
                 },
-                json={"image": image_array, "prompt": prompt, "max_tokens": 1024},
+                json={"image": image_array, "prompt": prompt, "max_tokens": 1200},
             )
 
         if resp.status_code != 200:
@@ -126,23 +247,56 @@ async def _extract_syllabus_topics(syllabus_base64: str, mime_type: str) -> Opti
             return None
 
         result_text = (body.get("result") or {}).get("description", "") or ""
-
-        # Extract the JSON object from the model's response text
         start = result_text.find("{")
         end = result_text.rfind("}") + 1
         if start >= 0 and end > start:
-            parsed = _json.loads(result_text[start:end])
-            topics = parsed.get("topics")
-            if topics and isinstance(topics, list):
-                print(f"[syllabus] Extracted {len(topics)} topic(s) from syllabus")
-                return topics
+            parsed = json.loads(result_text[start:end])
+            return _normalize_syllabus_structure(parsed)
 
-        print(f"[syllabus] Could not parse topics from response: {result_text[:300]}")
+        print(f"[syllabus] Could not parse image response: {result_text[:300]}")
         return None
-
     except Exception as exc:
-        print(f"[syllabus] Extraction error: {exc}")
+        print(f"[syllabus] Image extraction error for {filename or 'upload'}: {exc}")
         return None
+
+
+async def _extract_syllabus_structure(
+    syllabus_base64: str,
+    mime_type: str,
+    filename: str = "",
+) -> Optional[dict]:
+    """
+    Extracts a course title plus ordered topic list from uploaded study material.
+    Text-bearing documents are parsed directly; images use the vision path.
+    """
+    import base64 as _b64
+
+    try:
+        file_bytes = _b64.b64decode(syllabus_base64)
+    except Exception as exc:
+        print(f"[syllabus] base64 decode failed: {exc}")
+        return None
+
+    text = ""
+    try:
+        text = _extract_text_from_upload(file_bytes, mime_type, filename)
+    except Exception as exc:
+        print(f"[syllabus] Local text extraction failed for {filename or 'upload'}: {exc}")
+
+    if text.strip():
+        structure = await _extract_syllabus_structure_from_text(text, filename)
+        if structure:
+            print(
+                f"[syllabus] Extracted {len(structure['topics'])} topic(s) from text document"
+            )
+            return structure
+
+    structure = await _extract_syllabus_structure_from_image(file_bytes, filename)
+    if structure:
+        print(f"[syllabus] Extracted {len(structure['topics'])} topic(s) from image path")
+    else:
+        print("[syllabus] Extraction failed — no usable structure found")
+    return structure
 
 
 # ── Learning profile helpers ──────────────────────────────────────────────────
@@ -225,6 +379,7 @@ class B2CStartRequest(BaseModel):
     user_id: str
     syllabus_base64: Optional[str] = None
     syllabus_mime_type: Optional[str] = None
+    syllabus_filename: Optional[str] = None
     review_kc_id: Optional[str] = None
     roadmap_id: Optional[str] = None
 
@@ -236,7 +391,12 @@ class B2CTrekMessage(BaseModel):
     phase: str  # current phase from frontend state
 
 
-def _b2c_initial_state(user_id: str, session_id: str, syllabus_topics: Optional[list] = None) -> dict:
+def _b2c_initial_state(
+    user_id: str,
+    session_id: str,
+    syllabus_topics: Optional[list] = None,
+    syllabus_course_title: Optional[str] = None,
+) -> dict:
     return {
         "user_id": user_id,
         "topic_id": "",
@@ -271,6 +431,7 @@ def _b2c_initial_state(user_id: str, session_id: str, syllabus_topics: Optional[
         "_discovery_profile": None,
         "learning_style_hint": None,
         "syllabus_topics": syllabus_topics,
+        "syllabus_course_title": syllabus_course_title,
     }
 
 
@@ -858,25 +1019,37 @@ async def b2c_start_session(req: B2CStartRequest):
         }
 
     # Extract syllabus structure before creating the session.
-    # Raw bytes are never stored — only the parsed topic list.
+    # Raw bytes are never stored — only the parsed structure is kept.
+    syllabus_structure = None
     syllabus_topics = None
+    syllabus_course_title = None
     if req.syllabus_base64:
-        print("[syllabus] Extracting topics from uploaded syllabus...")
-        syllabus_topics = await _extract_syllabus_topics(
+        print("[syllabus] Extracting structure from uploaded syllabus...")
+        syllabus_structure = await _extract_syllabus_structure(
             req.syllabus_base64,
             req.syllabus_mime_type or "image/png",
+            req.syllabus_filename or "",
         )
-        if not syllabus_topics:
+        if not syllabus_structure:
             print("[syllabus] Extraction failed — continuing without syllabus")
+        else:
+            syllabus_topics = syllabus_structure.get("topics")
+            syllabus_course_title = syllabus_structure.get("course_title")
 
-    initial_state = _b2c_initial_state(req.user_id, session_id, syllabus_topics=syllabus_topics)
+    initial_state = _b2c_initial_state(
+        req.user_id,
+        session_id,
+        syllabus_topics=syllabus_topics,
+        syllabus_course_title=syllabus_course_title,
+    )
     result = await b2c_graph.ainvoke(initial_state, config=config)
 
     return {
         "session_id": session_id,
         "reply": result.get("pending_message", ""),
         "phase": result.get("phase", "discovery"),
-        "syllabus_extracted": syllabus_topics is not None,
+        "syllabus_extracted": syllabus_structure is not None,
+        "syllabus_course_title": syllabus_course_title,
     }
 
 

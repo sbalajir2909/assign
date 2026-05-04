@@ -67,6 +67,17 @@ prior_knowledge must be a list of strings — use an empty list [] if they know 
 weeks_available must be an integer — default 4 if their answer was vague.
 """
 
+SYLLABUS_CONTEXT_SYSTEM = """
+The learner uploaded a syllabus or study document before discovery started.
+
+Use that document context to ground Step 1.
+- Do not ignore the uploaded material and fall back to a generic topic ask.
+- Reference the document's primary topic or extracted topic list when asking what they want to learn.
+- If the learner says "that topic", "the whole thing", "the document", or similar,
+  resolve it to the uploaded document's primary topic unless they explicitly narrow it to a section.
+- If the uploaded document already makes the topic obvious, do not ask them to restate the exact title from scratch.
+"""
+
 
 def _sanitize_reply(text: str) -> str:
     clean = (text or "").replace("[After user responds]", "").strip()
@@ -90,15 +101,77 @@ def _can_finish_discovery(messages: list[dict]) -> bool:
     return _question_was_asked(messages, "What's your timeline?")
 
 
-async def run_discovery(messages: list[dict]) -> dict:
+def _syllabus_titles(syllabus_topics: list[dict] | None) -> list[str]:
+    titles: list[str] = []
+    for topic in syllabus_topics or []:
+        if not isinstance(topic, dict):
+            continue
+        title = str(topic.get("title", "")).strip()
+        if title:
+            titles.append(title)
+    return titles
+
+
+def _syllabus_opening_question(
+    syllabus_topics: list[dict] | None,
+    syllabus_course_title: str | None,
+) -> str:
+    titles = _syllabus_titles(syllabus_topics)
+    course_title = (syllabus_course_title or "").strip()
+    examples = ", ".join(titles[:3])
+
+    if course_title and examples:
+        return (
+            f"I read your document. It looks like it's about {course_title}. "
+            f"Do you want the whole thing, or a specific part like {examples}?"
+        )
+    if course_title:
+        return (
+            f"I read your document. It looks like it's about {course_title}. "
+            "Do you want the whole thing or a specific section?"
+        )
+    if examples:
+        return (
+            "I parsed your document. The main topics I found are "
+            f"{examples}. Which one do you want to focus on first?"
+        )
+    return TOPIC_QUESTION
+
+
+async def run_discovery(
+    messages: list[dict],
+    syllabus_topics: list[dict] | None = None,
+    syllabus_course_title: str | None = None,
+) -> dict:
     """
     Main discovery function.
     Takes full conversation history, returns next message.
     When discovery is complete, returns the learner profile.
     """
+    if not messages and (syllabus_topics or syllabus_course_title):
+        return {
+            "phase": "discovery",
+            "reply": _syllabus_opening_question(syllabus_topics, syllabus_course_title),
+            "learner_profile": None,
+            "discovery_complete": False,
+        }
+
+    extra_system_messages: list[dict] = []
+    if syllabus_topics or syllabus_course_title:
+        extra_system_messages.extend([
+            {"role": "system", "content": SYLLABUS_CONTEXT_SYSTEM},
+            {"role": "system", "content": (
+                "Uploaded document context: " + json.dumps({
+                    "course_title": (syllabus_course_title or "").strip(),
+                    "topics": _syllabus_titles(syllabus_topics)[:12],
+                })
+            )},
+        ])
+
     response = await complete(
         messages=[
             {"role": "system", "content": DISCOVERY_SYSTEM},
+            *extra_system_messages,
             *messages,
         ],
         model_size="large",

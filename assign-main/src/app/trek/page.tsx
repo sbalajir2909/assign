@@ -292,7 +292,12 @@ function TrekPageInner() {
   }, [])
 
   // ── Start trek-api session ─────────────────────────────────────────────────
-  const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
+  const startSession = async (
+    uid: string,
+    syllabusB64?: string,
+    mimeType?: string,
+    filename?: string,
+  ) => {
     if (!uid) {
       setAuthError('sign in to start trek — there is no active user session.')
       setMessages([{ role: 'assistant', content: 'sign in to start trek — there is no active user session.' }])
@@ -305,6 +310,7 @@ function TrekPageInner() {
       if (syllabusB64) {
         startBody.syllabus_base64 = syllabusB64
         startBody.syllabus_mime_type = mimeType || 'image/png'
+        if (filename) startBody.syllabus_filename = filename
       }
       const data = await trekApi('start', startBody)
       setSessionId(data.session_id)
@@ -998,8 +1004,8 @@ function TrekPageInner() {
                       onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
                     >
                       got a syllabus, course outline, or study doc? upload it and trek will map the course to those topics
-                      <div style={{ marginTop: '10px', fontSize: '11px', opacity: 0.45 }}>PDF · PNG · JPG — max 5MB</div>
-                      <input id="syllabus-upload" type="file" accept=".pdf,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleFileSelect} />
+                      <div style={{ marginTop: '10px', fontSize: '11px', opacity: 0.45 }}>PDF · TXT · MD · PNG · JPG — max 5MB</div>
+                      <input id="syllabus-upload" type="file" accept=".pdf,.txt,.md,.markdown,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleFileSelect} />
                     </label>
                   ) : (
                     <div style={{ border: '2px solid var(--border)', padding: '16px 20px', fontFamily: 'var(--font-mono)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', boxShadow: '4px 4px 0 0 hsl(0 0% 10%)' }}>
@@ -1013,7 +1019,7 @@ function TrekPageInner() {
                       <button
                         className="ts"
                         style={{ flex: 1 }}
-                        onClick={() => startSession(userId, syllabusBase64, syllabusMimeType)}
+                        onClick={() => startSession(userId, syllabusBase64, syllabusMimeType, syllabusFilename)}
                       >
                         continue →
                       </button>

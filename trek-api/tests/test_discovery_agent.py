@@ -84,3 +84,48 @@ async def test_discovery_sanitizes_meta_instruction(monkeypatch):
     ])
 
     assert "[After user responds]" not in result["reply"]
+
+
+@pytest.mark.asyncio
+async def test_discovery_uses_uploaded_document_for_opening_question():
+    result = await discovery_agent.run_discovery(
+        [],
+        syllabus_topics=[
+            {"title": "Budgeting", "subtopics": [], "week_or_order": 1},
+            {"title": "Saving and Investing", "subtopics": [], "week_or_order": 2},
+        ],
+        syllabus_course_title="Personal Finance",
+    )
+
+    assert result["discovery_complete"] is False
+    assert result["phase"] == "discovery"
+    assert "Personal Finance" in result["reply"]
+    assert "specific part like Budgeting, Saving and Investing" in result["reply"]
+    assert result["reply"] != discovery_agent.TOPIC_QUESTION
+
+
+@pytest.mark.asyncio
+async def test_discovery_injects_uploaded_document_context(monkeypatch):
+    captured = {}
+
+    async def fake_complete(**kwargs):
+        captured["messages"] = kwargs["messages"]
+        return discovery_agent.PRIOR_QUESTION
+
+    monkeypatch.setattr(discovery_agent, "complete", fake_complete)
+
+    await discovery_agent.run_discovery(
+        [
+            {"role": "assistant", "content": "I read your document. It looks like it's about Personal Finance."},
+            {"role": "user", "content": "help me understand that topic"},
+        ],
+        syllabus_topics=[
+            {"title": "Budgeting", "subtopics": [], "week_or_order": 1},
+            {"title": "Saving and Investing", "subtopics": [], "week_or_order": 2},
+        ],
+        syllabus_course_title="Personal Finance",
+    )
+
+    system_messages = [message["content"] for message in captured["messages"] if message["role"] == "system"]
+    assert any("uploaded a syllabus or study document" in message for message in system_messages)
+    assert any('"course_title": "Personal Finance"' in message for message in system_messages)

@@ -99,3 +99,4 @@ class TrekStateB2C(TypedDict):
     # Extracted from uploaded syllabus (if any) — list of topic dicts.
     # Set once at session start; never contains raw file data.
     syllabus_topics: Optional[list]
+    syllabus_course_title: Optional[str]

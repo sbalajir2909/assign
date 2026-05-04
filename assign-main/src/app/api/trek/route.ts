@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     topic_id?: string
     syllabus_base64?: string
     syllabus_mime_type?: string
+    syllabus_filename?: string
     review_kc_id?: string
   } = {}
 
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'invalid json body' }, { status: 400 })
   }
 
-  const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type, review_kc_id } = body
+  const { action, session_id, user_id, message, roadmap_id, phase, topic_id, syllabus_base64, syllabus_mime_type, syllabus_filename, review_kc_id } = body
 
   try {
     const trekApiUrl = getTrekApiUrl()
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
       const sessionPayload: Record<string, string> = { user_id: user_id! }
       if (syllabus_base64) sessionPayload.syllabus_base64 = syllabus_base64
       if (syllabus_mime_type) sessionPayload.syllabus_mime_type = syllabus_mime_type
+      if (syllabus_filename) sessionPayload.syllabus_filename = syllabus_filename
       if (review_kc_id) sessionPayload.review_kc_id = review_kc_id
       if (roadmap_id) sessionPayload.roadmap_id = roadmap_id
 
