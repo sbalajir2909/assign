@@ -97,19 +97,30 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
   const action = searchParams.get('action')
   const userId = searchParams.get('userId') || searchParams.get('user_id')
-
-  if (action !== 'review' || !userId) {
-    return NextResponse.json({ error: 'invalid action' }, { status: 400 })
-  }
+  const sessionId = searchParams.get('sessionId') || searchParams.get('session_id')
 
   try {
-    const res = await fetch(`${TREK_API_URL}/api/b2c/review/${userId}`)
-    if (!res.ok) {
-      const text = await res.text()
-      throw new Error(`trek-api ${res.status}: ${text}`)
+    if (action === 'review' && userId) {
+      const res = await fetch(`${TREK_API_URL}/api/b2c/review/${userId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`trek-api ${res.status}: ${text}`)
+      }
+      const data = await res.json()
+      return NextResponse.json(data)
     }
-    const data = await res.json()
-    return NextResponse.json(data)
+
+    if (action === 'report' && sessionId) {
+      const res = await fetch(`${TREK_API_URL}/api/b2c/report/${sessionId}`)
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`trek-api ${res.status}: ${text}`)
+      }
+      const data = await res.json()
+      return NextResponse.json(data)
+    }
+
+    return NextResponse.json({ error: 'invalid action' }, { status: 400 })
   } catch (err) {
     console.error('[trek route get]', err)
     return NextResponse.json(

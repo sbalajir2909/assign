@@ -359,6 +359,224 @@ async def _fetch_due_review_kcs(user_id: str) -> dict:
     return {"due_count": due_count, "kcs": kcs}
 
 
+async def _persist_b2c_chat_turn(
+    user_id: str,
+    topic_id: str,
+    kc_id: str,
+    role: str,
+    content: str,
+) -> None:
+    if not user_id or not topic_id or not kc_id:
+        return
+    body = (content or "").strip()
+    if not body:
+        return
+    from db.client import supabase
+    try:
+        latest = await supabase.table("b2c_chat_history") \
+            .select("turn_index") \
+            .eq("user_id", user_id) \
+            .eq("topic_id", topic_id) \
+            .eq("kc_id", kc_id) \
+            .order("turn_index", desc=True) \
+            .limit(1) \
+            .execute()
+        next_index = ((latest.data or [{}])[0].get("turn_index") or 0) + 1 if latest.data else 1
+        await supabase.table("b2c_chat_history").insert({
+            "user_id": user_id,
+            "topic_id": topic_id,
+            "kc_id": kc_id,
+            "role": role,
+            "content": body,
+            "turn_index": next_index,
+        }).execute()
+    except Exception as e:
+        print(f"[chat_history] Failed to persist {role} turn for kc={kc_id}: {e}")
+
+
+def _classify_learning_velocity(scores: list[float]) -> str:
+    clean = [float(s) for s in scores if s is not None]
+    if len(clean) < 4:
+        return "steady"
+    midpoint = len(clean) // 2
+    first_half = clean[:midpoint]
+    second_half = clean[midpoint:]
+    if not first_half or not second_half:
+        return "steady"
+    delta = (sum(second_half) / len(second_half)) - (sum(first_half) / len(first_half))
+    if delta >= 0.08:
+        return "improving"
+    if delta <= -0.08:
+        return "slowing"
+    return "steady"
+
+
+def _fallback_report_suggestions(
+    strengths: list[str],
+    needs_work: list[str],
+    misconceptions: list[str],
+    velocity: str,
+) -> list[str]:
+    suggestions: list[str] = []
+    if misconceptions:
+        suggestions.append(f"Revisit {misconceptions[0]} first and rewrite it in one clean sentence before moving on.")
+    if needs_work:
+        suggestions.append(f"Schedule a quick retry loop on {needs_work[0]} with one example and one explanation from memory.")
+    if velocity == "slowing":
+        suggestions.append("Reduce the next study block to one concept and end with a short self-test instead of covering more material.")
+    elif velocity == "improving":
+        suggestions.append("Keep the current pace and finish each concept by teaching it back in your own words once.")
+    if not suggestions and strengths:
+        suggestions.append(f"Use {strengths[0]} as a template: compare new concepts against it to anchor the pattern faster.")
+    return suggestions[:3] or ["Keep going one concept at a time and end each session with a one-minute recall check."]
+
+
+async def _generate_report_suggestions(report_payload: dict) -> list[str]:
+    from utils.model_router import complete
+
+    try:
+        raw = await complete(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You analyze learning data. Return JSON array only.",
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Based on this data give 2-3 specific actionable suggestions. "
+                        "Direct and practical. JSON array only.\n\n"
+                        + json.dumps(report_payload)
+                    ),
+                },
+            ],
+            model_size="small",
+            temperature=0.2,
+            max_tokens=200,
+        )
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        suggestions = json.loads(text.strip())
+        if isinstance(suggestions, list):
+            cleaned = [str(item).strip() for item in suggestions if str(item).strip()]
+            if cleaned:
+                return cleaned[:3]
+    except Exception as e:
+        print(f"[report] Suggestion generation failed: {e}")
+    return _fallback_report_suggestions(
+        report_payload.get("strengths", []),
+        report_payload.get("needs_work", []),
+        report_payload.get("misconceptions", []),
+        report_payload.get("learning_velocity", "steady"),
+    )
+
+
+async def _fetch_session_report(session_id: str) -> dict:
+    config = {"configurable": {"thread_id": session_id}}
+    checkpoint = await b2c_graph.aget_state(config)
+    if not checkpoint or not checkpoint.values:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    state = dict(checkpoint.values)
+    user_id = state.get("user_id")
+    topic_id = state.get("topic_id")
+    topic_title = state.get("topic_title") or "Untitled topic"
+    if not user_id or not topic_id:
+        raise HTTPException(status_code=400, detail="Session does not have topic context")
+
+    if not _b2c_pool:
+        raise RuntimeError("B2C pool not initialized")
+
+    kc_query = """
+        SELECT
+            kc.id AS kc_id,
+            kc.title,
+            kc.order_index,
+            COALESCE(skc.status, 'not_started') AS status,
+            COALESCE(skc.p_learned, 0) AS p_learned,
+            COALESCE(skc.attempt_count, 0) AS attempt_count,
+            skc.flag_type,
+            AVG(il.weighted_score) AS avg_score,
+            MIN(CASE WHEN il.passed THEN il.attempt_number END) AS passed_on_attempt
+        FROM knowledge_components kc
+        LEFT JOIN student_kc_state skc
+          ON skc.kc_id = kc.id AND skc.user_id = %s
+        LEFT JOIN interaction_log il
+          ON il.kc_id = kc.id AND il.user_id = %s
+        WHERE kc.topic_id = %s
+        GROUP BY kc.id, kc.title, kc.order_index, skc.status, skc.p_learned, skc.attempt_count, skc.flag_type
+        ORDER BY kc.order_index
+    """
+    velocity_query = """
+        SELECT weighted_score
+        FROM interaction_log
+        WHERE user_id = %s AND topic_id = %s
+        ORDER BY created_at ASC
+    """
+
+    async with _b2c_pool.connection() as conn:
+        async with conn.cursor(row_factory=dict_row) as cur:
+            await cur.execute(kc_query, (user_id, user_id, topic_id))
+            kc_rows = await cur.fetchall()
+            await cur.execute(velocity_query, (user_id, topic_id))
+            velocity_rows = await cur.fetchall()
+
+    kcs = []
+    mastered_count = 0
+    strengths: list[str] = []
+    needs_work: list[str] = []
+    misconceptions: list[str] = []
+    passed_attempts: list[int] = []
+
+    for row in kc_rows:
+        p_learned = float(row["p_learned"] or 0.0)
+        status = row["status"]
+        avg_score = float(row["avg_score"] or 0.0)
+        passed_on_attempt = row["passed_on_attempt"]
+        if status in ("mastered", "force_advanced"):
+            mastered_count += 1
+        if p_learned >= 0.8:
+            strengths.append(row["title"])
+        if row["flag_type"] == "struggling":
+            needs_work.append(row["title"])
+        if row["flag_type"] == "misconception":
+            misconceptions.append(row["title"])
+        if passed_on_attempt:
+            passed_attempts.append(int(passed_on_attempt))
+
+        kcs.append({
+            "title": row["title"],
+            "status": status,
+            "p_learned": round(p_learned, 4),
+            "attempt_count": int(row["attempt_count"] or 0),
+            "flag_type": row["flag_type"],
+            "avg_score": round(avg_score, 4),
+            "passed_on_attempt": int(passed_on_attempt) if passed_on_attempt else None,
+        })
+
+    total_kcs = len(kcs) or 1
+    overall_mastery_pct = round((mastered_count / total_kcs) * 100, 1)
+    avg_attempts = round(sum(passed_attempts) / len(passed_attempts), 2) if passed_attempts else 0.0
+    velocity_scores = [float(row["weighted_score"] or 0.0) for row in velocity_rows]
+    learning_velocity = _classify_learning_velocity(velocity_scores)
+
+    report = {
+        "topic_title": topic_title,
+        "overall_mastery_pct": overall_mastery_pct,
+        "kcs": kcs,
+        "strengths": strengths,
+        "needs_work": needs_work,
+        "misconceptions": misconceptions,
+        "avg_attempts_to_master": avg_attempts,
+        "learning_velocity": learning_velocity,
+    }
+    report["suggestions"] = await _generate_report_suggestions(report)
+    return report
+
+
 @app.post("/api/b2c/session")
 async def b2c_start_session(req: B2CStartRequest):
     """Start a new B2C adaptive learning session."""
@@ -407,6 +625,14 @@ async def b2c_start_session(req: B2CStartRequest):
             ),
         })
         result = await b2c_graph.ainvoke(initial_state, config=config)
+        if result.get("pending_message"):
+            await _persist_b2c_chat_turn(
+                req.user_id,
+                review_row["topic_id"],
+                review_row["kc_id"],
+                "assistant",
+                result["pending_message"],
+            )
         return {
             "session_id": session_id,
             "reply": result.get("pending_message", ""),
@@ -469,6 +695,13 @@ async def b2c_message(body: B2CTrekMessage):
                 recent = list(state.get("recent_turns", []))
                 recent.append({"role": "user", "content": body.message})
                 updated_state["recent_turns"] = recent[-6:]
+                await _persist_b2c_chat_turn(
+                    updated_state["user_id"],
+                    updated_state["topic_id"],
+                    updated_state["current_kc_id"],
+                    "user",
+                    body.message,
+                )
 
                 await b2c_graph.aupdate_state(config, updated_state)
 
@@ -510,6 +743,13 @@ async def b2c_message(body: B2CTrekMessage):
                 if patch.get("phase") in ("notes_generation", "teaching"):
                     result = await b2c_graph.ainvoke(None, config=config)
                     if result.get("pending_message"):
+                        await _persist_b2c_chat_turn(
+                            updated_state["user_id"],
+                            result.get("topic_id", updated_state["topic_id"]),
+                            result.get("current_kc_id"),
+                            "assistant",
+                            result["pending_message"],
+                        )
                         yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', 'awaiting_explanation')})}\n\n"
 
                     if result.get("kc_graph"):
@@ -539,12 +779,27 @@ async def b2c_message(body: B2CTrekMessage):
                     recent = list(state.get("recent_turns", []))
                     recent.append({"role": "user", "content": body.message})
                     patch["recent_turns"] = recent[-6:]
+                    await _persist_b2c_chat_turn(
+                        state["user_id"],
+                        state["topic_id"],
+                        state["current_kc_id"],
+                        "user",
+                        body.message,
+                    )
 
                 # For discovery, persist the appended user turn, but also pass
                 # it into ainvoke so this run sees it even with PostgresSaver.
                 result = await b2c_graph.ainvoke(patch, config=config)
 
                 if result.get("pending_message"):
+                    if result.get("current_kc_id") and result.get("phase") in ("teaching", "awaiting_explanation"):
+                        await _persist_b2c_chat_turn(
+                            state["user_id"],
+                            result.get("topic_id", state.get("topic_id")),
+                            result.get("current_kc_id"),
+                            "assistant",
+                            result["pending_message"],
+                        )
                     yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', phase)})}\n\n"
 
                 if result.get("kc_graph"):
@@ -602,6 +857,16 @@ async def b2c_get_topics(user_id: str):
 async def b2c_get_review_due(user_id: str):
     try:
         return await _fetch_due_review_kcs(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/b2c/report/{session_id}")
+async def b2c_get_report(session_id: str):
+    try:
+        return await _fetch_session_report(session_id)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

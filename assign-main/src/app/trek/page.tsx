@@ -4,6 +4,7 @@ export const dynamic = 'force-dynamic'
 
 import { useState, useRef, useEffect, useCallback, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
 interface Message { role: 'assistant' | 'user'; content: string; is_consolidation?: boolean }
@@ -22,10 +23,26 @@ interface SprintPlan {
   sprints: Sprint[]; cut_nodes: SprintConcept[]; cut_count: number
 }
 interface Visual { type: string; subtype: string; code: string; confidence: string }
+interface NoteKeyPoint { point: string; example: string }
 interface ConceptMaterial {
   concept_index: number; concept_title: string; summary: string
-  key_mental_models: string[]; common_mistakes: string[]
-  sources: { label: string; url: string }[]; user_notes: string
+  quick_reference: string; the_analogy: string; key_points: NoteKeyPoint[]
+  student_analogy: string; watch_out: string; full_text: string; user_notes: string
+}
+interface ReportKC {
+  title: string; status: string; p_learned: number; attempt_count: number
+  flag_type: string | null; avg_score: number; passed_on_attempt: number | null
+}
+interface SessionReport {
+  topic_title: string
+  overall_mastery_pct: number
+  kcs: ReportKC[]
+  strengths: string[]
+  needs_work: string[]
+  misconceptions: string[]
+  avg_attempts_to_master: number
+  learning_velocity: 'improving' | 'steady' | 'slowing'
+  suggestions: string[]
 }
 type Phase = 'discovery' | 'gist' | 'learning'
 type SidebarTab = 'roadmap' | 'materials'
@@ -36,6 +53,12 @@ const label: React.CSSProperties = { fontFamily: 'var(--font-mono)', fontSize: '
 const card: React.CSSProperties = { background: 'var(--card)', border: '2px solid var(--border)', borderRadius: '4px' }
 const shadow: React.CSSProperties = { boxShadow: '4px 4px 0px 0px hsl(0 0% 10%)' }
 const shadowSm: React.CSSProperties = { boxShadow: '3px 3px 0px 0px hsl(0 0% 10%)' }
+
+const scoreColor = (pct: number) => {
+  if (pct >= 75) return '#1f6f3f'
+  if (pct >= 50) return '#8a5a00'
+  return '#8f1d1d'
+}
 
 async function trekApi(action: string, body: object) {
   const res = await fetch('/api/trek', {
@@ -68,9 +91,8 @@ function TrekPageInner() {
 
   // ── Course state ───────────────────────────────────────────────────────────
   const [sprintPlan, setSprintPlan] = useState<SprintPlan | null>(null)
-  const [gist, setGist] = useState<string>('')
+  const [gist] = useState<string>('')
   const [currentConceptIdx, setCurrentConceptIdx] = useState(0)
-  const [currentSprintIdx, setCurrentSprintIdx] = useState(0)
   const [roadmapId, setRoadmapId] = useState<string>('')
   const [visual, setVisual] = useState<Visual | null>(null)
 
@@ -80,6 +102,10 @@ function TrekPageInner() {
   const [selectedMaterial, setSelectedMaterial] = useState<ConceptMaterial | null>(null)
   const [userNotes, setUserNotes] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
+  const [reportOpen, setReportOpen] = useState(false)
+  const [reportLoading, setReportLoading] = useState(false)
+  const [report, setReport] = useState<SessionReport | null>(null)
+  const [selectionMenu, setSelectionMenu] = useState<{ text: string; x: number; y: number } | null>(null)
 
   // ── Syllabus upload ────────────────────────────────────────────────────────
   const [showUploadZone, setShowUploadZone] = useState(false)
@@ -101,6 +127,25 @@ function TrekPageInner() {
   const currentConcept = allConcepts[currentConceptIdx] || null
   const masteredCount = allConcepts.filter(c => c.status === 'done').length
 
+  const syncSelectedMaterial = useCallback((nextMaterials: ConceptMaterial[]) => {
+    if (!selectedMaterial) return
+    const match = nextMaterials.find(m => m.concept_index === selectedMaterial.concept_index)
+    if (match) {
+      setSelectedMaterial(match)
+      setUserNotes(match.user_notes || '')
+    }
+  }, [selectedMaterial])
+
+  const refreshMaterials = useCallback(async (nextRoadmapId?: string) => {
+    const targetRoadmapId = nextRoadmapId || roadmapId
+    if (!targetRoadmapId) return
+    const res = await fetch(`/api/roadmap?id=${targetRoadmapId}`)
+    const data = await res.json()
+    const nextMaterials = (data.materials || []) as ConceptMaterial[]
+    setMaterials(nextMaterials)
+    syncSelectedMaterial(nextMaterials)
+  }, [roadmapId, syncSelectedMaterial])
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, loading])
@@ -121,6 +166,37 @@ function TrekPageInner() {
     return () => container.removeEventListener('scroll', handleScroll)
   }, [visibleCount])
 
+  useEffect(() => {
+    const handleMouseUp = () => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || !chatContainerRef.current) {
+        setSelectionMenu(null)
+        return
+      }
+      const text = selection.toString().trim()
+      if (!text) {
+        setSelectionMenu(null)
+        return
+      }
+      const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null
+      if (!range) return
+      const ancestor = range.commonAncestorContainer
+      if (!chatContainerRef.current.contains(ancestor.nodeType === Node.TEXT_NODE ? ancestor.parentElement : ancestor)) {
+        setSelectionMenu(null)
+        return
+      }
+      const rect = range.getBoundingClientRect()
+      setSelectionMenu({
+        text,
+        x: rect.left + rect.width / 2,
+        y: Math.max(16, rect.top - 44),
+      })
+    }
+
+    document.addEventListener('mouseup', handleMouseUp)
+    return () => document.removeEventListener('mouseup', handleMouseUp)
+  }, [])
+
   // ── Init ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     const init = async () => {
@@ -138,7 +214,7 @@ function TrekPageInner() {
       }
     }
     init()
-  }, [])
+  }, [searchParams])
 
   // ── Start trek-api session ─────────────────────────────────────────────────
   const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
@@ -208,6 +284,21 @@ function TrekPageInner() {
     setMessages([resumeMsg, ...history.slice(-15)])
     setPhase('learning')
   }
+
+  const fetchReport = useCallback(async () => {
+    if (!sessionId) return
+    setReportLoading(true)
+    try {
+      const res = await fetch(`/api/trek?action=report&sessionId=${sessionId}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'report error')
+      setReport(data as SessionReport)
+    } catch {
+      setReport(null)
+    } finally {
+      setReportLoading(false)
+    }
+  }, [sessionId])
 
   // ── Send message — reads SSE stream from /api/trek ────────────────────────
   const send = async () => {
@@ -292,6 +383,9 @@ function TrekPageInner() {
                   cut_nodes: [],
                   cut_count: 0,
                 })
+                if (evt.roadmap_id) {
+                  void refreshMaterials(evt.roadmap_id)
+                }
                 setPhase('gist')
               }
 
@@ -315,13 +409,28 @@ function TrekPageInner() {
                   }
                 })
               }
+              if (roadmapId) {
+                void refreshMaterials()
+              }
+              if (reportOpen) {
+                void fetchReport()
+              }
 
             } else if (evt.type === 'consolidation') {
               setMessages(prev => [...prev, { role: 'assistant', content: evt.content, is_consolidation: true }])
+              if (roadmapId) {
+                void refreshMaterials()
+              }
 
             } else if (evt.type === 'validation_result') {
               if (evt.next_phase) setBackendPhase(evt.next_phase)
               if (phase !== 'learning') setPhase('learning')
+              if (evt.passed && roadmapId) {
+                void refreshMaterials()
+              }
+              if (reportOpen) {
+                void fetchReport()
+              }
 
             } else if (evt.type === 'error') {
               setMessages(prev => [
@@ -359,7 +468,7 @@ function TrekPageInner() {
     await fetch('/api/roadmap', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
-      body: JSON.stringify({ roadmapId, userNotes: { conceptIndex: selectedMaterial.concept_index, notes: userNotes } })
+      body: JSON.stringify({ roadmapId, userNotes: { conceptIndex: selectedMaterial.concept_index, conceptTitle: selectedMaterial.concept_title, notes: userNotes } })
     })
     setMaterials(prev => prev.map(m =>
       m.concept_index === selectedMaterial.concept_index ? { ...m, user_notes: userNotes } : m
@@ -367,11 +476,62 @@ function TrekPageInner() {
     setSavingNotes(false)
   }
 
+  const saveSelectionToNotes = async () => {
+    if (!selectionMenu?.text || !roadmapId) return
+    const targetMaterial = selectedMaterial || materials.find(m => m.concept_index === currentConceptIdx) || (currentConcept ? {
+      concept_index: currentConceptIdx,
+      concept_title: currentConcept.title,
+      summary: '',
+      quick_reference: '',
+      the_analogy: '',
+      key_points: [],
+      student_analogy: '',
+      watch_out: '',
+      full_text: '',
+      user_notes: '',
+    } : null)
+    if (!targetMaterial) return
+
+    const nextNotes = [targetMaterial.user_notes?.trim(), selectionMenu.text]
+      .filter(Boolean)
+      .join('\n\n')
+
+    if (selectedMaterial && selectedMaterial.concept_index === targetMaterial.concept_index) {
+      setUserNotes(nextNotes)
+      setSelectedMaterial({ ...selectedMaterial, user_notes: nextNotes })
+    }
+
+    setMaterials(prev => {
+      const existing = prev.find(m => m.concept_index === targetMaterial.concept_index)
+      if (existing) {
+        return prev.map(m => m.concept_index === targetMaterial.concept_index ? { ...m, user_notes: nextNotes } : m)
+      }
+      return [...prev, { ...targetMaterial, user_notes: nextNotes }]
+    })
+
+    const { data: { session } } = await supabase.auth.getSession()
+    await fetch('/api/roadmap', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${session?.access_token || ''}` },
+      body: JSON.stringify({
+        roadmapId,
+        userNotes: {
+          conceptIndex: targetMaterial.concept_index,
+          conceptTitle: targetMaterial.concept_title,
+          notes: nextNotes,
+        },
+      }),
+    })
+
+    setSelectionMenu(null)
+    window.getSelection()?.removeAllRanges()
+  }
+
   // ── Export notes ───────────────────────────────────────────────────────────
   const exportNotes = () => {
     if (!materials.length) return
     const content = materials.map(m =>
-      `# ${m.concept_title}\n${m.summary}\n## Key Mental Models\n${m.key_mental_models.map(mm => `- ${mm}`).join('\n')}\n## Common Mistakes\n${m.common_mistakes.map(mm => `- ${mm}`).join('\n')}${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}\n---`
+      `# ${m.concept_title}\n${m.quick_reference ? `> ${m.quick_reference}\n\n` : ''}${m.summary}\n${m.the_analogy ? `\n## How We Explained It\n${m.the_analogy}\n` : ''}\n## Key Points\n${m.key_points.map(kp => `- ${kp.point}${kp.example ? `\n  Example: ${kp.example}` : ''}`).join('\n')}${m.student_analogy ? `\n## In Your Own Words\n${m.student_analogy}\n` : ''}${m.watch_out ? `\n## Watch Out\n${m.watch_out}\n` : ''}${m.user_notes ? `\n## My Notes\n${m.user_notes}` : ''}\n---`
     ).join('\n\n')
     const blob = new Blob([`# ${sprintPlan?.topic || 'Course'} Notes\n\n${content}`], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
@@ -400,13 +560,36 @@ function TrekPageInner() {
         .na{width:100%;background:var(--background);border:1.5px solid var(--border);border-radius:4px;color:var(--foreground);font-size:12px;padding:10px 12px;outline:none;font-family:var(--font-mono);resize:vertical;min-height:80px;line-height:1.6;transition:box-shadow 0.15s}.na:focus{box-shadow:3px 3px 0 0 hsl(0 0% 10%)}
       `}</style>
 
+      {selectionMenu && (
+        <button
+          onClick={saveSelectionToNotes}
+          style={{
+            position: 'fixed',
+            left: selectionMenu.x,
+            top: selectionMenu.y,
+            transform: 'translateX(-50%)',
+            zIndex: 40,
+            background: 'var(--foreground)',
+            color: 'var(--background)',
+            border: '2px solid var(--border)',
+            padding: '8px 12px',
+            borderRadius: '4px',
+            ...mono,
+            fontSize: '11px',
+            ...shadowSm,
+          }}
+        >
+          save to notes
+        </button>
+      )}
+
       <div style={{ display: 'flex', height: '100vh' }}>
 
         {/* ── Sidebar ─────────────────────────────────────────────────────── */}
         {(phase === 'gist' || phase === 'learning') && (
           <aside style={{ width: '288px', flexShrink: 0, borderRight: '2px solid var(--border)', display: 'flex', flexDirection: 'column', padding: '24px 18px', overflowY: 'auto', background: 'var(--card)' }}>
             <div style={{ marginBottom: '20px', paddingBottom: '16px', borderBottom: '1.5px solid var(--muted)' }}>
-              <a href="/" style={{ textDecoration: 'none' }}><span style={{ ...serif, fontSize: '22px', color: 'var(--foreground)', letterSpacing: '-0.5px' }}>assign</span></a>
+              <Link href="/" style={{ textDecoration: 'none' }}><span style={{ ...serif, fontSize: '22px', color: 'var(--foreground)', letterSpacing: '-0.5px' }}>assign</span></Link>
             </div>
 
             {/* Gist overview */}
@@ -499,7 +682,7 @@ function TrekPageInner() {
                         {masteredCount} of {allConcepts.length} mastered
                       </p>
                     </div>
-                    <a href="/dashboard" style={{ display: 'block', textAlign: 'center' as const, padding: '10px', ...card, ...mono, fontSize: '12px', color: 'var(--foreground)', textDecoration: 'none' }}>dashboard →</a>
+                    <Link href="/dashboard" style={{ display: 'block', textAlign: 'center' as const, padding: '10px', ...card, ...mono, fontSize: '12px', color: 'var(--foreground)', textDecoration: 'none' }}>dashboard →</Link>
                   </div>
                 )}
               </div>
@@ -527,29 +710,42 @@ function TrekPageInner() {
                   <div style={{ flex: 1 }}>
                     <button onClick={() => setSelectedMaterial(null)} style={{ background: 'none', border: 'none', color: 'var(--muted-foreground)', cursor: 'pointer', ...mono, fontSize: '11px', marginBottom: '14px', padding: 0 }}>← back</button>
                     <p style={{ fontSize: '15px', fontWeight: 500, marginBottom: '12px' }}>{selectedMaterial.concept_title}</p>
+                    {selectedMaterial.quick_reference && (
+                      <div style={{ ...card, ...shadowSm, background: 'var(--background)', padding: '12px', marginBottom: '14px' }}>
+                        <p style={{ ...label, marginBottom: '6px' }}>quick reference</p>
+                        <p style={{ ...mono, fontSize: '12px', lineHeight: 1.6 }}>{selectedMaterial.quick_reference}</p>
+                      </div>
+                    )}
                     <p style={{ ...mono, fontSize: '12px', color: 'var(--muted-foreground)', lineHeight: 1.7, marginBottom: '16px' }}>{selectedMaterial.summary}</p>
-                    {selectedMaterial.key_mental_models.length > 0 && (
+                    {selectedMaterial.the_analogy && (
                       <div style={{ marginBottom: '14px' }}>
-                        <p style={{ ...label, marginBottom: '8px' }}>mental models</p>
-                        {selectedMaterial.key_mental_models.map((mm, i) => (
-                          <div key={i} style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', padding: '2px 0', display: 'flex', gap: '6px' }}><span>→</span>{mm}</div>
+                        <p style={{ ...label, marginBottom: '8px' }}>how we explained it</p>
+                        <p style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', lineHeight: 1.7 }}>{selectedMaterial.the_analogy}</p>
+                      </div>
+                    )}
+                    {selectedMaterial.key_points.length > 0 && (
+                      <div style={{ marginBottom: '14px' }}>
+                        <p style={{ ...label, marginBottom: '8px' }}>key points</p>
+                        {selectedMaterial.key_points.map((item, i) => (
+                          <div key={i} style={{ marginBottom: '10px', borderTop: i === 0 ? 'none' : '1px solid var(--muted)', paddingTop: i === 0 ? 0 : '10px' }}>
+                            <p style={{ ...mono, fontSize: '11px', marginBottom: '4px' }}>{item.point}</p>
+                            {item.example && (
+                              <pre style={{ ...mono, fontSize: '10px', whiteSpace: 'pre-wrap', color: 'var(--muted-foreground)', background: 'var(--background)', border: '1px solid var(--border)', padding: '8px', borderRadius: '4px' }}>{item.example}</pre>
+                            )}
+                          </div>
                         ))}
                       </div>
                     )}
-                    {selectedMaterial.common_mistakes.length > 0 && (
+                    {selectedMaterial.student_analogy && (
                       <div style={{ marginBottom: '14px' }}>
-                        <p style={{ ...label, marginBottom: '8px' }}>common mistakes</p>
-                        {selectedMaterial.common_mistakes.map((mm, i) => (
-                          <div key={i} style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', padding: '2px 0', display: 'flex', gap: '6px' }}><span>!</span>{mm}</div>
-                        ))}
+                        <p style={{ ...label, marginBottom: '8px' }}>in your own words</p>
+                        <p style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', lineHeight: 1.7 }}>{selectedMaterial.student_analogy}</p>
                       </div>
                     )}
-                    {selectedMaterial.sources?.length > 0 && (
-                      <div style={{ marginBottom: '14px' }}>
-                        <p style={{ ...label, marginBottom: '8px' }}>sources</p>
-                        {selectedMaterial.sources.map((s, i) => (
-                          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" style={{ ...mono, fontSize: '11px', background: 'var(--muted)', color: 'var(--foreground)', border: '1px solid var(--border)', padding: '3px 8px', borderRadius: '2px', textDecoration: 'none', display: 'inline-block', margin: '2px' }}>{s.label} ↗</a>
-                        ))}
+                    {selectedMaterial.watch_out && (
+                      <div style={{ ...card, padding: '12px', marginBottom: '14px', background: 'var(--background)' }}>
+                        <p style={{ ...label, marginBottom: '6px' }}>watch out</p>
+                        <p style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', lineHeight: 1.7 }}>{selectedMaterial.watch_out}</p>
                       </div>
                     )}
                     <div>
@@ -580,8 +776,20 @@ function TrekPageInner() {
               {phase === 'gist' && <span style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)' }}>review course</span>}
             </div>
             <div style={{ display: 'flex', gap: '12px' }}>
-              <a href="/dashboard" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>dashboard</a>
-              <a href="/" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>← home</a>
+              {phase === 'learning' && (
+                <button
+                  onClick={() => {
+                    if (!sessionId) return
+                    setReportOpen(true)
+                    void fetchReport()
+                  }}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', ...mono, fontSize: '11px', color: 'var(--muted-foreground)', padding: 0 }}
+                >
+                  progress
+                </button>
+              )}
+              <Link href="/dashboard" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>dashboard</Link>
+              <Link href="/" style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)', textDecoration: 'none' }}>← home</Link>
             </div>
           </div>
 
@@ -688,6 +896,85 @@ function TrekPageInner() {
           </div>
         </div>
       </div>
+
+      {reportOpen && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.2)', zIndex: 35 }}>
+          <div style={{ position: 'absolute', top: 0, right: 0, width: '380px', maxWidth: '100%', height: '100%', background: 'var(--card)', borderLeft: '2px solid var(--border)', padding: '22px 18px', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '18px' }}>
+              <div>
+                <p style={{ ...label, marginBottom: '6px' }}>performance report</p>
+                <p style={{ ...mono, fontSize: '12px', color: 'var(--muted-foreground)' }}>{report?.topic_title || currentConcept?.title || 'current session'}</p>
+              </div>
+              <button onClick={() => setReportOpen(false)} style={{ background: 'none', border: 'none', cursor: 'pointer', ...mono, fontSize: '11px', color: 'var(--muted-foreground)', padding: 0 }}>close</button>
+            </div>
+
+            {reportLoading && (
+              <div style={{ ...card, padding: '14px', ...mono, fontSize: '12px' }}>loading report...</div>
+            )}
+
+            {!reportLoading && report && (
+              <>
+                <div style={{ ...card, ...shadowSm, padding: '16px', marginBottom: '16px' }}>
+                  <p style={{ ...label, marginBottom: '8px' }}>overall mastery</p>
+                  <div style={{ ...mono, fontSize: '34px', lineHeight: 1, marginBottom: '8px' }}>{Math.round(report.overall_mastery_pct)}%</div>
+                  <p style={{ ...mono, fontSize: '11px', color: 'var(--muted-foreground)' }}>
+                    avg attempts to master: {report.avg_attempts_to_master || 0} · velocity: {report.learning_velocity}
+                  </p>
+                </div>
+
+                <div style={{ marginBottom: '16px' }}>
+                  <p style={{ ...label, marginBottom: '8px' }}>knowledge components</p>
+                  {report.kcs.map((kc, index) => {
+                    const pct = Math.round(kc.p_learned * 100)
+                    const color = scoreColor(pct)
+                    return (
+                      <div key={`${kc.title}-${index}`} style={{ ...card, padding: '10px 12px', marginBottom: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', marginBottom: '6px' }}>
+                          <span style={{ fontSize: '12px', fontWeight: 500 }}>{kc.title}</span>
+                          <span style={{ ...mono, fontSize: '10px', color: 'var(--muted-foreground)' }}>{pct}%</span>
+                        </div>
+                        <div style={{ height: '6px', border: '1px solid var(--border)', background: 'var(--background)', marginBottom: '6px' }}>
+                          <div style={{ height: '100%', width: `${pct}%`, background: color }} />
+                        </div>
+                        <p style={{ ...mono, fontSize: '10px', color: 'var(--muted-foreground)' }}>
+                          {kc.status} · attempts {kc.attempt_count} · avg score {Math.round(kc.avg_score * 100)}%
+                          {kc.passed_on_attempt ? ` · passed on attempt ${kc.passed_on_attempt}` : ''}
+                        </p>
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {[
+                  { label: 'strengths', values: report.strengths },
+                  { label: 'needs work', values: report.needs_work },
+                  { label: 'misconceptions', values: report.misconceptions },
+                ].map(section => (
+                  <div key={section.label} style={{ marginBottom: '14px' }}>
+                    <p style={{ ...label, marginBottom: '8px' }}>{section.label}</p>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                      {section.values.length === 0 ? (
+                        <span style={{ ...mono, fontSize: '10px', color: 'var(--muted-foreground)' }}>none</span>
+                      ) : section.values.map(value => (
+                        <span key={value} style={{ ...mono, fontSize: '10px', border: '1.5px solid var(--border)', padding: '4px 8px', background: 'var(--background)' }}>{value}</span>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+
+                <div>
+                  <p style={{ ...label, marginBottom: '8px' }}>suggestions</p>
+                  {report.suggestions.map((suggestion, index) => (
+                    <div key={`${suggestion}-${index}`} style={{ ...card, padding: '10px 12px', marginBottom: '8px' }}>
+                      <p style={{ ...mono, fontSize: '11px', lineHeight: 1.7 }}>{index + 1}. {suggestion}</p>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   )
 }

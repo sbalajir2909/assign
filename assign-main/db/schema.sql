@@ -394,8 +394,10 @@ create table if not exists kc_notes (
   concept_name    text        not null,
   summary         text        not null,
   key_points      jsonb       not null,
+  the_analogy     text,
   student_analogy text,
   watch_out       text,
+  quick_reference text,
 
   -- Concatenated plain text used for context loading and semantic search
   full_text       text        not null,
