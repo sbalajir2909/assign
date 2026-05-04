@@ -1,6 +1,7 @@
 'use client'
 
 import { Suspense, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import FlagBadge from '@/components/FlagBadge'
@@ -100,9 +101,9 @@ function ProgressPageInner() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 28px', borderBottom: '2px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <a href="/" style={{ textDecoration: 'none' }}>
+          <Link href="/" style={{ textDecoration: 'none' }}>
             <span style={{ ...serif, fontSize: '22px', letterSpacing: '-0.5px' }}>assign</span>
-          </a>
+          </Link>
           <span style={{ ...mono, fontSize: '11px', border: '1.5px solid var(--border)', borderRadius: '4px', padding: '3px 8px' }}>
             progress
           </span>
@@ -120,12 +121,12 @@ function ProgressPageInner() {
       ) : topics.length === 0 ? (
         <div style={{ textAlign: 'center', paddingTop: '80px', display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
           <p style={{ ...mono, fontSize: '13px', color: 'var(--muted-foreground)' }}>no topics started yet</p>
-          <a
-            href="/trek/new"
+          <Link
+            href="/trek"
             style={{ ...mono, fontSize: '12px', color: 'var(--foreground)', border: '2px solid var(--border)', borderRadius: '4px', padding: '8px 16px', textDecoration: 'none', boxShadow: '3px 3px 0 0 hsl(0 0% 10%)' }}
           >
             start learning →
-          </a>
+          </Link>
         </div>
       ) : (
         <div style={{ display: 'flex', maxHeight: 'calc(100vh - 65px)' }}>
@@ -156,8 +157,8 @@ function ProgressPageInner() {
               </button>
             ))}
 
-            <a
-              href="/trek/new"
+            <Link
+              href="/trek"
               style={{
                 ...mono,
                 display: 'block',
@@ -172,7 +173,7 @@ function ProgressPageInner() {
               }}
             >
               + new topic
-            </a>
+            </Link>
           </div>
 
           <div style={{ flex: 1, overflowY: 'auto', padding: '24px' }}>

@@ -65,6 +65,7 @@ async def test_preknown_mastered_kc_gets_sm2_schedule(monkeypatch):
         "user_id": "user-1",
         "topic_id": "topic-1",
         "topic_title": "Data Structures",
+        "session_id": "session-1",
         "_discovery_profile": {
             "topic": "Data Structures",
             "prior_knowledge": ["Hash Maps"],
@@ -85,6 +86,11 @@ async def test_preknown_mastered_kc_gets_sm2_schedule(monkeypatch):
     assert student_rows[0]["sm2_repetitions"] == 1
     assert student_rows[0]["sm2_next_review"]
     assert saved_roadmap["validated_nodes"][0]["title"] == "Collision Resolution"
+    assert saved_roadmap["topic_id"] == "topic-1"
+    assert saved_roadmap["session_id"] == "session-1"
+    assert saved_roadmap["concepts"][0]["status"] == "done"
+    assert result["kc_graph"][0].status == "mastered"
+    assert result["kc_graph"][0].p_learned == 0.9
     assert result["unlock_next_concepts_enabled"] is True
     assert result["phase"] in ("teaching", "complete")
 

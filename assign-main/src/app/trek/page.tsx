@@ -44,6 +44,25 @@ interface SessionReport {
   learning_velocity: 'improving' | 'steady' | 'slowing'
   suggestions: string[]
 }
+interface RoadmapConceptSnapshot {
+  id?: string
+  title: string
+  status?: string
+  p_learned?: number
+  order_index?: number
+}
+interface ResumeRoadmap {
+  id: string
+  topic: string
+  gist?: string | null
+  sprint_plan?: Partial<SprintPlan> | null
+  current_concept_index: number
+  conversation_history: Message[]
+  concepts: RoadmapConceptSnapshot[]
+  learner_profile?: Record<string, unknown> | null
+  topic_id?: string | null
+  active_session_id?: string | null
+}
 type Phase = 'discovery' | 'gist' | 'learning'
 type SidebarTab = 'roadmap' | 'materials'
 
@@ -58,6 +77,80 @@ const scoreColor = (pct: number) => {
   if (pct >= 75) return '#1f6f3f'
   if (pct >= 50) return '#8a5a00'
   return '#8f1d1d'
+}
+
+const getCurrentConceptIndex = (concepts: RoadmapConceptSnapshot[]) => {
+  const explicitCurrent = concepts.findIndex(concept => concept.status === 'current')
+  if (explicitCurrent >= 0) return explicitCurrent
+  const firstIncomplete = concepts.findIndex(concept => concept.status !== 'done')
+  if (firstIncomplete >= 0) return firstIncomplete
+  return concepts.length ? concepts.length - 1 : 0
+}
+
+const buildSprintPlanFromRoadmap = (roadmap: ResumeRoadmap): SprintPlan | null => {
+  const conceptSnapshots = Array.isArray(roadmap.concepts) ? roadmap.concepts : []
+  const currentIndex = getCurrentConceptIndex(conceptSnapshots)
+  const snapshotById = new Map(conceptSnapshots.map(concept => [concept.id || concept.title, concept]))
+  const snapshotByTitle = new Map(conceptSnapshots.map(concept => [concept.title, concept]))
+  const baseSprints = roadmap.sprint_plan?.sprints?.length
+    ? roadmap.sprint_plan.sprints
+    : [{
+        sprint_number: 1,
+        total_hours: conceptSnapshots.length,
+        cognitive_load: 0,
+        concepts: conceptSnapshots.map((concept, index) => ({
+          id: concept.id || `kc-${index}`,
+          title: concept.title,
+          description: '',
+          why_needed: '',
+          complexity: 0,
+          estimated_hours: 1,
+          prerequisites: [],
+          requires_live_data: false,
+        })),
+      }]
+
+  let globalIndex = 0
+  const sprints = baseSprints.map((sprint) => ({
+    sprint_number: sprint.sprint_number || 1,
+    total_hours: sprint.total_hours || (sprint.concepts?.length || 0),
+    cognitive_load: sprint.cognitive_load || 0,
+    concepts: (sprint.concepts || []).map((concept) => {
+      const snapshot =
+        snapshotById.get(concept.id || concept.title) ||
+        snapshotByTitle.get(concept.title || '')
+      const status =
+        snapshot?.status === 'done'
+          ? 'done'
+          : globalIndex === currentIndex
+          ? 'current'
+          : 'locked'
+      const normalized = {
+        id: concept.id || snapshot?.id || `kc-${globalIndex}`,
+        title: concept.title || snapshot?.title || `Concept ${globalIndex + 1}`,
+        description: concept.description || '',
+        why_needed: concept.why_needed || '',
+        complexity: concept.complexity || 0,
+        estimated_hours: concept.estimated_hours || 1,
+        prerequisites: concept.prerequisites || [],
+        requires_live_data: concept.requires_live_data || false,
+        status: status as 'locked' | 'current' | 'done',
+      }
+      globalIndex += 1
+      return normalized
+    }),
+  }))
+
+  return {
+    topic: roadmap.topic,
+    exit_condition: roadmap.sprint_plan?.exit_condition || '',
+    total_sprints: roadmap.sprint_plan?.total_sprints || sprints.length,
+    total_hours: roadmap.sprint_plan?.total_hours || sprints.reduce((sum, sprint) => sum + sprint.total_hours, 0),
+    available_hours: roadmap.sprint_plan?.available_hours || sprints.reduce((sum, sprint) => sum + sprint.total_hours, 0),
+    sprints,
+    cut_nodes: roadmap.sprint_plan?.cut_nodes || [],
+    cut_count: roadmap.sprint_plan?.cut_count || 0,
+  }
 }
 
 async function trekApi(action: string, body: object) {
@@ -92,7 +185,7 @@ function TrekPageInner() {
 
   // ── Course state ───────────────────────────────────────────────────────────
   const [sprintPlan, setSprintPlan] = useState<SprintPlan | null>(null)
-  const [gist] = useState<string>('')
+  const [gist, setGist] = useState<string>('')
   const [currentConceptIdx, setCurrentConceptIdx] = useState(0)
   const [roadmapId, setRoadmapId] = useState<string>('')
   const [visual, setVisual] = useState<Visual | null>(null)
@@ -225,14 +318,14 @@ function TrekPageInner() {
       const resumeId = searchParams.get('resume')
       if (resumeId) {
         setResuming(true)
-        await loadRoadmap(resumeId)
+        await loadRoadmap(resumeId, uid)
         setResuming(false)
       } else {
         setShowUploadZone(true)
       }
     }
     init()
-  }, [searchParams])
+  }, [loadRoadmap, searchParams])
 
   // ── Start trek-api session ─────────────────────────────────────────────────
   const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
@@ -286,18 +379,26 @@ function TrekPageInner() {
   }
 
   // ── Load existing roadmap ──────────────────────────────────────────────────
-  const loadRoadmap = async (id: string) => {
+  const loadRoadmap = useCallback(async (id: string, resumeUserId?: string) => {
     const { data: { session } } = await supabase.auth.getSession()
     const res = await fetch(`/api/roadmap?id=${id}`, {
       headers: { Authorization: `Bearer ${session?.access_token || ''}` }
     })
     const data = await res.json()
     if (!data.roadmap) return
-    const { roadmap, materials: mats } = data
+    const { roadmap, materials: mats } = data as { roadmap: ResumeRoadmap; materials: ConceptMaterial[] }
     const history = (roadmap.conversation_history || []) as Message[]
+    const currentIdx = roadmap.current_concept_index || 0
+    const activeSessionId = roadmap.active_session_id || (roadmap.learner_profile?._session_id as string | undefined) || ''
+    const roadmapTopicId = roadmap.topic_id || (roadmap.learner_profile?._topic_id as string | undefined) || ''
+
     setRoadmapId(id)
+    setSessionId(activeSessionId)
+    setTopicId(roadmapTopicId || '')
     setMaterials(mats || [])
-    setCurrentConceptIdx(roadmap.current_concept_index || 0)
+    setCurrentConceptIdx(currentIdx)
+    setSprintPlan(buildSprintPlanFromRoadmap(roadmap))
+    setGist(typeof roadmap.gist === 'string' ? roadmap.gist : '')
     fullHistoryRef.current = history
     setVisibleCount(15)
     const resumeMsg: Message = {
@@ -306,7 +407,45 @@ function TrekPageInner() {
     }
     setMessages([resumeMsg, ...history.slice(-15)])
     setPhase('learning')
-  }
+
+    let needsSessionBootstrap = !activeSessionId
+    if (activeSessionId) {
+      const stateRes = await fetch(`/api/b2c/state/${activeSessionId}`)
+      if (stateRes.ok) {
+        const state = await stateRes.json()
+        if (state.phase) setBackendPhase(state.phase)
+        if (state.topic_id) setTopicId(state.topic_id)
+        if (typeof state.current_kc_index === 'number') setCurrentConceptIdx(state.current_kc_index)
+      } else {
+        needsSessionBootstrap = true
+      }
+    }
+
+    if (needsSessionBootstrap) {
+      const bootstrapUserId = session?.user.id || resumeUserId || userId
+      if (!bootstrapUserId) return
+
+      const data = await trekApi('start', {
+        user_id: bootstrapUserId,
+        roadmap_id: id,
+      })
+
+      if (data.session_id) setSessionId(data.session_id)
+      if (data.phase) setBackendPhase(data.phase)
+      if (data.topic_id) setTopicId(data.topic_id)
+      if (typeof data.current_kc_index === 'number') setCurrentConceptIdx(data.current_kc_index)
+
+      if (data.reply) {
+        const resumedHistory = [...history]
+        const lastMessage = resumedHistory[resumedHistory.length - 1]
+        if (!lastMessage || lastMessage.role !== 'assistant' || lastMessage.content !== data.reply) {
+          resumedHistory.push({ role: 'assistant', content: data.reply })
+        }
+        fullHistoryRef.current = resumedHistory
+        setMessages([resumeMsg, ...resumedHistory.slice(-15)])
+      }
+    }
+  }, [userId])
 
   const fetchReport = useCallback(async () => {
     if (!sessionId) return
@@ -328,6 +467,7 @@ function TrekPageInner() {
     if (!input.trim() || loading) return
     const userMsg: Message = { role: 'user', content: input }
     const sentInput = input
+    fullHistoryRef.current = [...fullHistoryRef.current, userMsg]
     setMessages(prev => [...prev, userMsg])
     setInput('')
     setLoading(true)
@@ -369,12 +509,20 @@ function TrekPageInner() {
             const evt = JSON.parse(raw)
 
             if (evt.type === 'message') {
-              setMessages(prev => [...prev, { role: 'assistant', content: evt.content }])
-              if (evt.phase) setBackendPhase(evt.phase)
+              const assistantMessage = { role: 'assistant' as const, content: evt.content }
+              fullHistoryRef.current = [...fullHistoryRef.current, assistantMessage]
+              setMessages(prev => [...prev, assistantMessage])
+              if (evt.phase) {
+                setBackendPhase(evt.phase)
+                if (evt.phase === 'teaching' || evt.phase === 'awaiting_explanation' || evt.phase === 'notes_generation') {
+                  setPhase('learning')
+                }
+              }
 
             } else if (evt.type === 'curriculum_ready') {
               if (evt.topic_id) setTopicId(evt.topic_id)
               if (evt.roadmap_id) setRoadmapId(evt.roadmap_id)
+              if (typeof evt.current_kc_index === 'number') setCurrentConceptIdx(evt.current_kc_index)
               if (evt.kc_graph?.length) {
                 // Wrap the flat KC list in a single sprint so the existing
                 // sidebar roadmap renders without structural changes.
@@ -398,9 +546,11 @@ function TrekPageInner() {
                       estimated_hours: 1,
                       prerequisites: [],
                       requires_live_data: false,
-                      status: kc.status === 'mastered'
+                      status: kc.status === 'mastered' || kc.status === 'force_advanced'
                         ? 'done'
-                        : i === 0 ? 'current' : 'locked' as const,
+                        : (typeof evt.current_kc_index === 'number' ? i === evt.current_kc_index : i === 0)
+                        ? 'current'
+                        : 'locked' as const,
                     })),
                   }],
                   cut_nodes: [],
@@ -415,19 +565,34 @@ function TrekPageInner() {
             } else if (evt.type === 'kc_graph') {
               // Update per-KC status after validation or note generation.
               if (evt.kc_graph?.length) {
+                const currentIdx = typeof evt.current_kc_index === 'number'
+                  ? evt.current_kc_index
+                  : evt.kc_graph.findIndex((kc: { status: string }) => kc.status === 'in_progress')
+                if (currentIdx >= 0) setCurrentConceptIdx(currentIdx)
                 const statusMap = new Map(
                   evt.kc_graph.map((kc: { id: string; status: string }) => [kc.id, kc.status])
                 )
                 setSprintPlan(prev => {
                   if (!prev) return prev
+                  let globalIndex = 0
                   return {
                     ...prev,
                     sprints: prev.sprints.map(s => ({
                       ...s,
-                      concepts: s.concepts.map(c => ({
-                        ...c,
-                        status: statusMap.get(c.id) === 'mastered' ? 'done' : c.status,
-                      })),
+                      concepts: s.concepts.map(c => {
+                        const sourceStatus = statusMap.get(c.id)
+                        const nextStatus =
+                          sourceStatus === 'mastered' || sourceStatus === 'force_advanced'
+                            ? 'done'
+                            : globalIndex === currentIdx
+                            ? 'current'
+                            : 'locked'
+                        globalIndex += 1
+                        return {
+                          ...c,
+                          status: nextStatus,
+                        }
+                      }),
                     })),
                   }
                 })
@@ -440,7 +605,9 @@ function TrekPageInner() {
               }
 
             } else if (evt.type === 'consolidation') {
-              setMessages(prev => [...prev, { role: 'assistant', content: evt.content, is_consolidation: true }])
+              const consolidationMessage = { role: 'assistant' as const, content: evt.content, is_consolidation: true }
+              fullHistoryRef.current = [...fullHistoryRef.current, consolidationMessage]
+              setMessages(prev => [...prev, consolidationMessage])
               if (roadmapId) {
                 void refreshMaterials()
               }
@@ -456,6 +623,7 @@ function TrekPageInner() {
               }
 
             } else if (evt.type === 'error') {
+              fullHistoryRef.current = [...fullHistoryRef.current, { role: 'assistant', content: evt.message || 'something went wrong, try again' }]
               setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: evt.message || 'something went wrong, try again' },
@@ -829,7 +997,7 @@ function TrekPageInner() {
                       onMouseEnter={e => (e.currentTarget.style.boxShadow = '4px 4px 0 0 hsl(0 0% 10%)')}
                       onMouseLeave={e => (e.currentTarget.style.boxShadow = 'none')}
                     >
-                      got a syllabus? upload it for a course mapped to your topics
+                      got a syllabus, course outline, or study doc? upload it and trek will map the course to those topics
                       <div style={{ marginTop: '10px', fontSize: '11px', opacity: 0.45 }}>PDF · PNG · JPG — max 5MB</div>
                       <input id="syllabus-upload" type="file" accept=".pdf,.png,.jpg,.jpeg" style={{ display: 'none' }} onChange={handleFileSelect} />
                     </label>

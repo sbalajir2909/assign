@@ -17,6 +17,9 @@ async def save_roadmap(
     gist: str,
     validated_nodes: list,
     learner_profile: dict,
+    topic_id: str,
+    session_id: str,
+    concepts: list,
     sources_hit: list | None = None,
 ) -> str:
     """
@@ -26,15 +29,21 @@ async def save_roadmap(
     this propagate so the session is not left without a roadmap_id.
     """
     total_minutes = int(sprint_plan.get("total_hours", 0) * 60)
+    roadmap_profile = {
+        **(learner_profile or {}),
+        "_topic_id": topic_id,
+        "_session_id": session_id,
+    }
 
     result = await supabase.table("roadmaps").insert({
         "user_id": user_id,
         "topic": topic,
         "status": "active",
+        "concepts": concepts,
         "sprint_plan": sprint_plan,
         "gist": gist,
         "validated_nodes": validated_nodes,
-        "learner_profile": learner_profile,
+        "learner_profile": roadmap_profile,
         "sources_hit": sources_hit or [],
         "total_minutes_estimated": total_minutes,
     }).execute()

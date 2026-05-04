@@ -14,6 +14,7 @@ interface Roadmap {
   status: 'active' | 'completed'
   current_concept_index: number
   concepts: { title: string; status: string }[]
+  learner_profile?: { _topic_id?: string }
   created_at: string
   last_studied: string
   total_minutes_estimated: number
@@ -21,7 +22,7 @@ interface Roadmap {
 }
 
 const MODES = [
-  { label: 'trek',   emoji: '🗺️', tagline: 'learn it end to end.',      desc: 'Adaptive trek now runs through the B2C teaching loop with notes and progress tracking.',                         href: '/trek/new' },
+  { label: 'trek',   emoji: '🗺️', tagline: 'learn it end to end.',      desc: 'Adaptive trek now runs through the B2C teaching loop with notes and progress tracking.',                         href: '/trek' },
   { label: 'spark',  emoji: '⚡',  tagline: 'stuck on one thing?',       desc: 'Drop in one topic. AI finds exactly what you don\'t know and fixes only that — fast.',                          href: '/spark'  },
   { label: 'recall', emoji: '🧠',  tagline: 'prove you know it.',        desc: 'Explain a topic from scratch. AI listens, then tells you exactly what broke down.',                              href: '/recall' },
   { label: 'build',  emoji: '🔨',  tagline: 'figure it out yourself.',   desc: 'Pair programmer that never writes code for you. It asks until you get there.',                                   href: '/build'  },
@@ -194,13 +195,19 @@ export default function Dashboard() {
           <section className="mb-16">
             <div className="flex justify-between items-center mb-5">
               <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">adaptive topics</p>
-              <Link href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+              <Link href="/trek" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
                 + start adaptive trek
               </Link>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
-              {topics.map(topic => (
+              {topics.map(topic => {
+                const matchingRoadmap = roadmaps.find(
+                  (roadmap) =>
+                    roadmap.learner_profile?._topic_id === topic.id ||
+                    roadmap.topic.toLowerCase() === topic.title.toLowerCase()
+                )
+                return (
                 <div key={topic.id} className="brutalist-shadow bg-card border-2 border-foreground p-5">
                   <div className="flex items-start justify-between gap-4 mb-4">
                     <div className="min-w-0">
@@ -218,7 +225,7 @@ export default function Dashboard() {
 
                   <div className="flex gap-2">
                     <Link
-                      href={`/trek/${topic.id}`}
+                      href={matchingRoadmap ? `/trek?resume=${matchingRoadmap.id}` : '/trek'}
                       className="font-mono text-xs text-foreground border-2 border-foreground px-3 py-2 bg-background no-underline hover:bg-muted transition-colors"
                     >
                       open →
@@ -231,7 +238,8 @@ export default function Dashboard() {
                     </Link>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           </section>
         )}
@@ -240,7 +248,7 @@ export default function Dashboard() {
         <section>
           <div className="flex justify-between items-center mb-5">
             <p className="font-mono text-xs text-muted-foreground uppercase tracking-widest">your trek courses</p>
-            <Link href="/trek/new" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
+            <Link href="/trek" className="font-mono text-xs text-foreground border-b border-foreground pb-px no-underline hover:text-primary transition-colors">
               + new course
             </Link>
           </div>
@@ -251,7 +259,7 @@ export default function Dashboard() {
           ) : roadmaps.length === 0 ? (
             <div className="py-16 px-6 text-center border-2 border-dashed border-muted">
               <p className="font-mono text-sm text-muted-foreground mb-6">no courses yet — start your first trek</p>
-              <Link href="/trek/new" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
+              <Link href="/trek" className="brutalist-shadow brutalist-shadow-hover inline-block bg-foreground text-background font-mono text-sm font-bold px-7 py-3 border-2 border-foreground no-underline">
                 start trek →
               </Link>
             </div>

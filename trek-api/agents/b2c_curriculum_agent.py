@@ -44,12 +44,19 @@ def _is_pre_known(title: str, prior_knowledge: list[str]) -> bool:
         item_lower = item.lower().strip()
         if not item_lower:
             continue
-        # Direct substring: "lists" in "Python lists" or "Python lists" in "lists"
-        if item_lower in title_lower or title_lower in item_lower:
-            return True
-        # Word-level overlap ignoring stop words
         item_words = set(item_lower.split()) - _STOP_WORDS
-        if item_words and (title_words & item_words):
+        overlap = title_words & item_words
+
+        # Direct substring: "lists" in "Python lists" or "Python lists" in "lists"
+        if len(item_words) >= 2 and (item_lower in title_lower or title_lower in item_lower):
+            return True
+        # Word-level overlap ignoring stop words. Require at least two concrete
+        # overlaps so broad self-reports do not auto-master whole branches.
+        if len(overlap) >= 2:
+            return True
+        # Short KC titles can still count if every meaningful title word is
+        # explicitly covered by the learner's prior-knowledge phrase.
+        if title_words and len(title_words) <= 2 and overlap == title_words:
             return True
     return False
 
@@ -190,6 +197,8 @@ async def run_b2c_curriculum(state: dict) -> dict:
     kc_nodes: list[KCNode] = []
     for i, node in enumerate(ordered_nodes):
         kc_id = runtime_ids.get(node.get("id")) or str(uuid.uuid4())
+        is_pre_known = i < n_pre_known
+        is_current = i == n_pre_known and i < len(ordered_nodes)
         kc_nodes.append(KCNode(
             id=kc_id,
             title=node.get("title", f"Concept {i + 1}"),
@@ -200,6 +209,8 @@ async def run_b2c_curriculum(state: dict) -> dict:
                 if prereq_id in runtime_ids
             ],
             order_index=i,
+            p_learned=0.9 if is_pre_known else 0.0,
+            status="mastered" if is_pre_known else ("in_progress" if is_current else "not_started"),
         ))
 
     # ── Persist to DB ─────────────────────────────────────────────────────────
@@ -251,6 +262,16 @@ async def run_b2c_curriculum(state: dict) -> dict:
     # Teaching starts at the first NEW KC (past all pre-known ones)
     first_new_idx = n_pre_known
     first_kc = kc_nodes[first_new_idx] if first_new_idx < len(kc_nodes) else None
+    concepts_snapshot = []
+    for i, kc in enumerate(kc_nodes):
+        dashboard_status = "done" if i < n_pre_known else ("current" if first_kc and i == first_new_idx else "locked")
+        concepts_snapshot.append({
+            "id": kc.id,
+            "title": kc.title,
+            "status": dashboard_status,
+            "p_learned": kc.p_learned,
+            "order_index": kc.order_index,
+        })
 
     # Build intro message (gist)
     gist = result.get("gist") or (
@@ -267,6 +288,9 @@ async def run_b2c_curriculum(state: dict) -> dict:
         gist=gist,
         validated_nodes=deferred_nodes,
         learner_profile=raw_profile or {},
+        topic_id=topic_id,
+        session_id=state.get("session_id", ""),
+        concepts=concepts_snapshot,
         sources_hit=result.get("sources_hit", []),
     )
     print(f"[b2c_curriculum] roadmap persisted: {roadmap_id}")

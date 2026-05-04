@@ -18,6 +18,154 @@ const flattenSprintConcepts = (roadmap: Record<string, unknown>) => {
   return (legacyConcepts || []).map((concept) => concept.title || '')
 }
 
+const getRoadmapMeta = (roadmap: Record<string, unknown>) => {
+  const profile =
+    roadmap.learner_profile && typeof roadmap.learner_profile === 'object'
+      ? (roadmap.learner_profile as Record<string, unknown>)
+      : {}
+
+  return {
+    topicId: typeof profile._topic_id === 'string' ? profile._topic_id : '',
+    activeSessionId: typeof profile._session_id === 'string' ? profile._session_id : '',
+  }
+}
+
+const resolveTopicId = async (
+  supabase: ReturnType<typeof createClient>,
+  roadmap: Record<string, unknown>
+) => {
+  const meta = getRoadmapMeta(roadmap)
+  if (meta.topicId) return meta.topicId
+
+  const { data: topicRow } = await supabase
+    .from('topics')
+    .select('id')
+    .eq('user_id', roadmap.user_id)
+    .eq('title', roadmap.topic)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  return topicRow?.id || ''
+}
+
+const buildLiveConceptSnapshot = async (
+  supabase: ReturnType<typeof createClient>,
+  roadmap: Record<string, unknown>,
+  topicId: string
+) => {
+  if (!topicId) {
+    const fallbackConcepts = Array.isArray(roadmap.concepts) ? roadmap.concepts : []
+    return {
+      concepts: fallbackConcepts,
+      currentConceptIndex: Number(roadmap.current_concept_index || 0),
+    }
+  }
+
+  const [{ data: kcs }, { data: states }] = await Promise.all([
+    supabase
+      .from('knowledge_components')
+      .select('id, title, order_index')
+      .eq('topic_id', topicId)
+      .order('order_index'),
+    supabase
+      .from('student_kc_state')
+      .select('kc_id, status, p_learned')
+      .eq('user_id', roadmap.user_id)
+      .eq('topic_id', topicId),
+  ])
+
+  if (!kcs?.length) {
+    const fallbackConcepts = Array.isArray(roadmap.concepts) ? roadmap.concepts : []
+    return {
+      concepts: fallbackConcepts,
+      currentConceptIndex: Number(roadmap.current_concept_index || 0),
+    }
+  }
+
+  const stateByKcId = new Map((states || []).map((row) => [row.kc_id, row]))
+  let currentConceptIndex = -1
+
+  const concepts = kcs.map((kc, index) => {
+    const studentState = stateByKcId.get(kc.id)
+    const mastered = studentState?.status === 'mastered' || studentState?.status === 'force_advanced'
+    if (!mastered && currentConceptIndex === -1) {
+      currentConceptIndex = index
+    }
+
+    return {
+      id: kc.id,
+      title: kc.title,
+      status: mastered ? 'done' : 'locked',
+      p_learned: Number(studentState?.p_learned || 0),
+      order_index: kc.order_index,
+      source_status: studentState?.status || 'not_started',
+    }
+  })
+
+  if (currentConceptIndex === -1) {
+    currentConceptIndex = concepts.length ? concepts.length - 1 : 0
+  }
+
+  if (concepts[currentConceptIndex] && concepts[currentConceptIndex].status !== 'done') {
+    concepts[currentConceptIndex] = {
+      ...concepts[currentConceptIndex],
+      status: 'current',
+    }
+  }
+
+  return { concepts, currentConceptIndex }
+}
+
+const buildConversationHistory = async (
+  supabase: ReturnType<typeof createClient>,
+  roadmap: Record<string, unknown>,
+  topicId: string
+) => {
+  if (!topicId) {
+    return Array.isArray(roadmap.conversation_history) ? roadmap.conversation_history : []
+  }
+
+  const { data: chatRows } = await supabase
+    .from('b2c_chat_history')
+    .select('role, content, created_at')
+    .eq('user_id', roadmap.user_id)
+    .eq('topic_id', topicId)
+    .order('created_at', { ascending: true })
+    .limit(250)
+
+  if (!chatRows?.length) {
+    return Array.isArray(roadmap.conversation_history) ? roadmap.conversation_history : []
+  }
+
+  return chatRows.map((row) => ({
+    role: row.role,
+    content: row.content,
+  }))
+}
+
+const hydrateRoadmap = async (
+  supabase: ReturnType<typeof createClient>,
+  roadmap: Record<string, unknown>,
+  options: { includeHistory?: boolean } = {}
+) => {
+  const meta = getRoadmapMeta(roadmap)
+  const topicId = await resolveTopicId(supabase, roadmap)
+  const { concepts, currentConceptIndex } = await buildLiveConceptSnapshot(supabase, roadmap, topicId)
+  const conversationHistory = options.includeHistory
+    ? await buildConversationHistory(supabase, roadmap, topicId)
+    : Array.isArray(roadmap.conversation_history) ? roadmap.conversation_history : []
+
+  return {
+    ...roadmap,
+    topic_id: topicId || null,
+    active_session_id: meta.activeSessionId || null,
+    concepts,
+    current_concept_index: currentConceptIndex,
+    conversation_history: conversationHistory,
+  }
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
@@ -34,28 +182,22 @@ export async function GET(req: NextRequest) {
         return NextResponse.json({ error: error?.message || 'roadmap not found' }, { status: 404 })
       }
       const supabase = getSupabase()
-      const conceptTitles = flattenSprintConcepts(roadmap)
+      const hydratedRoadmap = await hydrateRoadmap(supabase, roadmap, { includeHistory: true })
+      const conceptTitles = Array.isArray(hydratedRoadmap.concepts) && hydratedRoadmap.concepts.length
+        ? hydratedRoadmap.concepts.map((concept: { title?: string }) => concept.title || '')
+        : flattenSprintConcepts(hydratedRoadmap)
       const { data: noteOverlays } = await supabase
         .from('concept_materials')
         .select('*')
         .eq('roadmap_id', roadmapId)
         .order('concept_index')
 
-      let topicId: string | null = null
-      const { data: topicRow } = await supabase
-        .from('topics')
-        .select('id')
-        .eq('user_id', roadmap.user_id)
-        .eq('title', roadmap.topic)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .maybeSingle()
-      if (topicRow?.id) topicId = topicRow.id
+      const topicId = typeof hydratedRoadmap.topic_id === 'string' ? hydratedRoadmap.topic_id : null
 
       let notesQuery = supabase
         .from('kc_notes')
         .select('concept_name, summary, key_points, the_analogy, student_analogy, watch_out, quick_reference, full_text')
-        .eq('user_id', roadmap.user_id)
+        .eq('user_id', hydratedRoadmap.user_id)
       if (topicId) notesQuery = notesQuery.eq('topic_id', topicId)
       const { data: kcNotes } = await notesQuery.order('created_at')
 
@@ -82,19 +224,21 @@ export async function GET(req: NextRequest) {
         })
         .filter(Boolean)
 
-      return NextResponse.json({ roadmap, materials })
+      return NextResponse.json({ roadmap: hydratedRoadmap, materials })
     }
 
     if (userId) {
-      const { data: roadmaps, error } = await getSupabase()
+      const supabase = getSupabase()
+      const { data: roadmaps, error } = await supabase
         .from('roadmaps')
-        .select('id, topic, status, current_concept_index, concepts, created_at, last_studied, total_minutes_estimated, sources_hit')
+        .select('id, user_id, topic, status, current_concept_index, concepts, created_at, last_studied, total_minutes_estimated, sources_hit, learner_profile, conversation_history')
         .eq('user_id', userId)
         .order('last_studied', { ascending: false })
       if (error) {
         return NextResponse.json({ error: error.message }, { status: 500 })
       }
-      return NextResponse.json({ roadmaps: roadmaps || [] })
+      const hydratedRoadmaps = await Promise.all((roadmaps || []).map((roadmap) => hydrateRoadmap(supabase, roadmap)))
+      return NextResponse.json({ roadmaps: hydratedRoadmaps })
     }
 
     return NextResponse.json({ error: 'missing params' }, { status: 400 })

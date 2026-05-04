@@ -226,6 +226,7 @@ class B2CStartRequest(BaseModel):
     syllabus_base64: Optional[str] = None
     syllabus_mime_type: Optional[str] = None
     review_kc_id: Optional[str] = None
+    roadmap_id: Optional[str] = None
 
 class B2CTrekMessage(BaseModel):
     user_id: str
@@ -305,6 +306,189 @@ async def _load_review_kc_state(user_id: str, kc_id: str) -> Optional[dict]:
         async with conn.cursor(row_factory=dict_row) as cur:
             await cur.execute(query, (user_id, kc_id, user_id))
             return await cur.fetchone()
+
+
+async def _load_resume_session_state(user_id: str, roadmap_id: str) -> Optional[dict]:
+    """
+    Reconstructs a live B2C checkpoint from the roadmap + KC rows.
+    This supports older roadmaps created before _session_id was persisted.
+    """
+    from db.client import supabase
+    from graph.b2c_state import KCNode
+
+    roadmap_result = await supabase.table("roadmaps") \
+        .select("id, topic, learner_profile") \
+        .eq("id", roadmap_id) \
+        .eq("user_id", user_id) \
+        .maybe_single() \
+        .execute()
+    roadmap = roadmap_result.data
+    if not roadmap:
+        return None
+
+    learner_profile = roadmap.get("learner_profile") or {}
+    if not isinstance(learner_profile, dict):
+        learner_profile = {}
+
+    topic_id = learner_profile.get("_topic_id") if isinstance(learner_profile.get("_topic_id"), str) else ""
+    topic_title = ""
+
+    if topic_id:
+        topic_result = await supabase.table("topics") \
+            .select("id, title") \
+            .eq("id", topic_id) \
+            .maybe_single() \
+            .execute()
+        topic_row = topic_result.data
+        topic_title = (topic_row or {}).get("title") or ""
+    else:
+        topic_lookup = await supabase.table("topics") \
+            .select("id, title") \
+            .eq("user_id", user_id) \
+            .eq("title", roadmap.get("topic", "")) \
+            .order("created_at", desc=True) \
+            .limit(1) \
+            .execute()
+        topic_row = (topic_lookup.data or [None])[0]
+        if topic_row:
+            topic_id = topic_row.get("id") or ""
+            topic_title = topic_row.get("title") or ""
+
+    if not topic_id:
+        return None
+
+    kc_result = await supabase.table("knowledge_components") \
+        .select("id, title, description, prerequisites, order_index") \
+        .eq("topic_id", topic_id) \
+        .order("order_index") \
+        .execute()
+    kc_rows = kc_result.data or []
+    if not kc_rows:
+        return None
+
+    state_result = await supabase.table("student_kc_state") \
+        .select("kc_id, p_learned, attempt_count, status, flag_type, flag_reason") \
+        .eq("user_id", user_id) \
+        .eq("topic_id", topic_id) \
+        .execute()
+    state_by_kc = {
+        row.get("kc_id"): row
+        for row in (state_result.data or [])
+        if row.get("kc_id")
+    }
+
+    first_incomplete_index = next(
+        (
+            index for index, kc in enumerate(kc_rows)
+            if (state_by_kc.get(kc.get("id")) or {}).get("status") not in ("mastered", "force_advanced")
+        ),
+        -1,
+    )
+    all_mastered = first_incomplete_index == -1
+    current_kc_index = first_incomplete_index if first_incomplete_index >= 0 else max(len(kc_rows) - 1, 0)
+    current_kc_id = None if all_mastered else kc_rows[current_kc_index].get("id")
+
+    recent_turns: list[dict] = []
+    if current_kc_id:
+        history_result = await supabase.table("b2c_chat_history") \
+            .select("role, content, turn_index") \
+            .eq("user_id", user_id) \
+            .eq("topic_id", topic_id) \
+            .eq("kc_id", current_kc_id) \
+            .order("turn_index") \
+            .limit(50) \
+            .execute()
+        recent_turns = [
+            {
+                "role": row.get("role", "assistant"),
+                "content": row.get("content", ""),
+            }
+            for row in (history_result.data or [])[-6:]
+            if row.get("content")
+        ]
+
+    notes_result = await supabase.table("kc_notes") \
+        .select("kc_id") \
+        .eq("user_id", user_id) \
+        .eq("topic_id", topic_id) \
+        .execute()
+    notes_generated = [
+        row.get("kc_id")
+        for row in (notes_result.data or [])
+        if row.get("kc_id")
+    ]
+
+    kc_graph = []
+    bkt_state = {}
+    flags_this_session = []
+    for index, kc_row in enumerate(kc_rows):
+        kc_id = kc_row.get("id")
+        student_state = state_by_kc.get(kc_id, {})
+        source_status = student_state.get("status") or "not_started"
+        normalized_status = source_status
+        if source_status not in ("mastered", "force_advanced"):
+            normalized_status = "in_progress" if index == current_kc_index and not all_mastered else "not_started"
+
+        kc_node = KCNode(
+            id=kc_id,
+            title=kc_row.get("title") or f"Concept {index + 1}",
+            description=kc_row.get("description") or "",
+            prerequisites=[str(p) for p in (kc_row.get("prerequisites") or [])],
+            order_index=kc_row.get("order_index") or index,
+            p_learned=float(student_state.get("p_learned") or 0.0),
+            status=normalized_status,
+            attempt_count=int(student_state.get("attempt_count") or 0),
+            flag_type=student_state.get("flag_type"),
+            flag_reason=student_state.get("flag_reason"),
+        )
+        kc_graph.append(kc_node)
+        bkt_state[kc_id] = kc_node.p_learned
+        if kc_node.flag_type:
+            flags_this_session.append({
+                "kc_id": kc_node.id,
+                "kc_title": kc_node.title,
+                "flag_type": kc_node.flag_type,
+                "flag_reason": kc_node.flag_reason,
+            })
+
+    return {
+        "topic_id": topic_id,
+        "topic_title": topic_title or roadmap.get("topic", ""),
+        "roadmap_id": roadmap_id,
+        "phase": "complete" if all_mastered else "teaching",
+        "current_kc_index": current_kc_index,
+        "current_kc_id": current_kc_id,
+        "kc_graph": kc_graph,
+        "total_kcs": len(kc_graph),
+        "current_attempt_number": 1,
+        "bkt_state": bkt_state,
+        "recent_turns": recent_turns,
+        "flags_this_session": flags_this_session,
+        "notes_generated": notes_generated,
+        "unlock_next_concepts_enabled": True,
+        "_discovery_profile": learner_profile,
+    }
+
+
+async def _bind_session_to_roadmap(user_id: str, roadmap_id: str, topic_id: str, session_id: str) -> None:
+    from db.client import supabase
+    try:
+        existing = await supabase.table("roadmaps") \
+            .select("learner_profile") \
+            .eq("id", roadmap_id) \
+            .eq("user_id", user_id) \
+            .maybe_single() \
+            .execute()
+        learner_profile = existing.data.get("learner_profile") if existing.data else {}
+        if not isinstance(learner_profile, dict):
+            learner_profile = {}
+        learner_profile["_topic_id"] = topic_id
+        learner_profile["_session_id"] = session_id
+        await supabase.table("roadmaps").update({
+            "learner_profile": learner_profile,
+        }).eq("id", roadmap_id).eq("user_id", user_id).execute()
+    except Exception as e:
+        print(f"[resume] Failed to bind session {session_id} to roadmap {roadmap_id}: {e}")
 
 
 async def _fetch_due_review_kcs(user_id: str) -> dict:
@@ -639,6 +823,40 @@ async def b2c_start_session(req: B2CStartRequest):
             "phase": result.get("phase", "teaching"),
         }
 
+    if req.roadmap_id:
+        initial_state = _b2c_initial_state(req.user_id, session_id)
+        resume_state = await _load_resume_session_state(req.user_id, req.roadmap_id)
+        if not resume_state:
+            raise HTTPException(status_code=404, detail="Resume course not found")
+
+        initial_state.update(resume_state)
+        initial_state["session_id"] = session_id
+        await _bind_session_to_roadmap(
+            req.user_id,
+            req.roadmap_id,
+            initial_state.get("topic_id", ""),
+            session_id,
+        )
+
+        result = await b2c_graph.ainvoke(initial_state, config=config)
+        if result.get("pending_message") and result.get("current_kc_id"):
+            await _persist_b2c_chat_turn(
+                req.user_id,
+                result.get("topic_id", initial_state.get("topic_id", "")),
+                result["current_kc_id"],
+                "assistant",
+                result["pending_message"],
+            )
+
+        return {
+            "session_id": session_id,
+            "reply": result.get("pending_message", "welcome back! picking up where you left off."),
+            "phase": result.get("phase", initial_state.get("phase", "teaching")),
+            "topic_id": result.get("topic_id", initial_state.get("topic_id", "")),
+            "roadmap_id": req.roadmap_id,
+            "current_kc_index": result.get("current_kc_index", initial_state.get("current_kc_index", 0)),
+        }
+
     # Extract syllabus structure before creating the session.
     # Raw bytes are never stored — only the parsed topic list.
     syllabus_topics = None
@@ -757,7 +975,7 @@ async def b2c_message(body: B2CTrekMessage):
                             {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": result.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index}
                             for kc in result["kc_graph"]
                         ]
-                        yield f"data: {json.dumps({'type': 'kc_graph', 'kc_graph': kc_summary})}\n\n"
+                        yield f"data: {json.dumps({'type': 'kc_graph', 'kc_graph': kc_summary, 'current_kc_index': result.get('current_kc_index', updated_state.get('current_kc_index', 0))})}\n\n"
 
             # ── Discovery / other phases ─────────────────────────────────────
             else:
@@ -831,7 +1049,7 @@ async def b2c_message(body: B2CTrekMessage):
                         {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": result.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index}
                         for kc in result["kc_graph"]
                     ]
-                    yield f"data: {json.dumps({'type': 'curriculum_ready', 'topic_id': result.get('topic_id', ''), 'topic_title': result.get('topic_title', ''), 'roadmap_id': result.get('roadmap_id', ''), 'kc_graph': kc_summary})}\n\n"
+                    yield f"data: {json.dumps({'type': 'curriculum_ready', 'topic_id': result.get('topic_id', ''), 'topic_title': result.get('topic_title', ''), 'roadmap_id': result.get('roadmap_id', ''), 'kc_graph': kc_summary, 'current_kc_index': result.get('current_kc_index', 0)})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

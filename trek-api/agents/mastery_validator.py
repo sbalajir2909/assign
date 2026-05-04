@@ -245,6 +245,19 @@ def _sm2_quality_from_score(weighted_score: float, force_advanced: bool) -> int:
     return 1
 
 
+def _updated_kc_graph(state: dict, kc_id: str, status: str, p_learned: float) -> list:
+    next_graph = []
+    for node in state.get("kc_graph", []):
+        if node.id == kc_id:
+            node.status = status
+            node.p_learned = p_learned
+        elif node.order_index == state.get("current_kc_index") and status not in ("mastered", "force_advanced"):
+            node.status = "in_progress"
+            node.p_learned = p_learned if node.id == kc_id else getattr(node, "p_learned", 0.0)
+        next_graph.append(node)
+    return next_graph
+
+
 async def _upsert_bkt_row(
     user_id: str,
     kc_id: str,
@@ -445,6 +458,12 @@ async def validate_explanation(state: dict, client) -> tuple[dict, dict, str | N
         "last_weighted_score": weighted,
         "last_passed": advance,
         "bkt_state": {**state["bkt_state"], kc_id: new_p_learned},
+        "kc_graph": _updated_kc_graph(
+            state,
+            kc_id,
+            "mastered" if mastery else ("force_advanced" if force_advance else "in_progress"),
+            new_p_learned,
+        ),
     }
 
     if flag_type:

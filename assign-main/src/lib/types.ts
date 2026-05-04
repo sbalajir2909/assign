@@ -39,6 +39,7 @@ export interface SSEMessage {
   topic_id?: string
   topic_title?: string
   kc_graph?: KCNode[]
+  current_kc_index?: number
   passed?: boolean
   score?: number
   feedback?: string

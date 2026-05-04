@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import pytest
 
 import main
-from main import B2CTrekMessage
+from main import B2CStartRequest, B2CTrekMessage
 
 
 class FakeGraph:
@@ -219,3 +219,69 @@ async def test_b2c_message_auto_runs_curriculum_after_discovery(monkeypatch):
     assert "Discovery complete." in stream
     assert "Let's start with Flask routes." in stream
     assert '"type": "curriculum_ready"' in stream
+
+
+@pytest.mark.asyncio
+async def test_b2c_start_session_reconstructs_from_roadmap(monkeypatch):
+    fake_graph = FakeGraph(
+        state={},
+        result={
+            "pending_message": "Let's resume with budgeting basics.",
+            "phase": "awaiting_explanation",
+            "topic_id": "topic-1",
+            "current_kc_id": "kc-1",
+            "current_kc_index": 1,
+        },
+    )
+    persisted = []
+    bound = []
+
+    async def fake_load_resume(user_id, roadmap_id):
+        return {
+            "topic_id": "topic-1",
+            "topic_title": "Personal Finance",
+            "roadmap_id": roadmap_id,
+            "phase": "teaching",
+            "current_kc_index": 1,
+            "current_kc_id": "kc-1",
+            "kc_graph": [],
+            "total_kcs": 3,
+            "bkt_state": {"kc-1": 0.42},
+            "recent_turns": [],
+            "flags_this_session": [],
+            "notes_generated": [],
+            "unlock_next_concepts_enabled": True,
+            "_discovery_profile": {"topic": "Personal Finance"},
+        }
+
+    async def fake_bind(*args):
+        bound.append(args)
+
+    async def fake_persist(*args):
+        persisted.append(args)
+
+    monkeypatch.setattr(main, "b2c_graph", fake_graph)
+    monkeypatch.setattr(main, "_load_resume_session_state", fake_load_resume)
+    monkeypatch.setattr(main, "_bind_session_to_roadmap", fake_bind)
+    monkeypatch.setattr(main, "_persist_b2c_chat_turn", fake_persist)
+
+    response = await main.b2c_start_session(
+        B2CStartRequest(
+            user_id="user-1",
+            roadmap_id="roadmap-1",
+        )
+    )
+
+    assert response["reply"] == "Let's resume with budgeting basics."
+    assert response["phase"] == "awaiting_explanation"
+    assert response["topic_id"] == "topic-1"
+    assert response["roadmap_id"] == "roadmap-1"
+    assert response["current_kc_index"] == 1
+    assert fake_graph.invoked[0][1]["roadmap_id"] == "roadmap-1"
+    assert fake_graph.invoked[0][1]["topic_id"] == "topic-1"
+    assert bound == [
+        ("user-1", "roadmap-1", "topic-1", response["session_id"]),
+    ]
+    assert persisted == [
+        ("user-1", "topic-1", "kc-1", "assistant", "Let's resume with budgeting basics."),
+    ]

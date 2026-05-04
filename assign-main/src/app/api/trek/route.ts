@@ -49,6 +49,7 @@ export async function POST(req: NextRequest) {
       if (syllabus_base64) sessionPayload.syllabus_base64 = syllabus_base64
       if (syllabus_mime_type) sessionPayload.syllabus_mime_type = syllabus_mime_type
       if (review_kc_id) sessionPayload.review_kc_id = review_kc_id
+      if (roadmap_id) sessionPayload.roadmap_id = roadmap_id
 
       const res = await fetch(`${trekApiUrl}/api/b2c/session`, {
         method: 'POST',

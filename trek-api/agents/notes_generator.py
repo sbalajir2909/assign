@@ -269,11 +269,13 @@ async def generate_note(state: dict, client) -> dict:
         next_phase = "teaching"
         next_kc_id = state["kc_graph"][next_index].id
         next_kc_index = next_index
+        state["kc_graph"][next_index].status = "in_progress"
 
     return {
         "phase": next_phase,
         "current_kc_index": next_kc_index,
         "current_kc_id": next_kc_id,
         "current_attempt_number": 1,
+        "kc_graph": state["kc_graph"],
         "notes_generated": state.get("notes_generated", []) + [state["current_kc_id"]],
     }

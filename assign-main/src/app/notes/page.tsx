@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import NoteCard from '@/components/NoteCard'
@@ -56,9 +57,9 @@ export default function NotesPage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '20px 28px', borderBottom: '2px solid var(--border)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          <a href="/" style={{ textDecoration: 'none' }}>
+          <Link href="/" style={{ textDecoration: 'none' }}>
             <span style={{ ...serif, fontSize: '22px', letterSpacing: '-0.5px' }}>assign</span>
-          </a>
+          </Link>
           <span style={{ ...mono, fontSize: '11px', border: '1.5px solid var(--border)', borderRadius: '4px', padding: '3px 8px' }}>
             notes
           </span>
@@ -101,8 +102,8 @@ export default function NotesPage() {
                 : 'no notes match your search'}
             </p>
             {notes.length === 0 && (
-              <a
-                href="/trek/new"
+              <Link
+                href="/trek"
                 style={{
                   ...mono,
                   fontSize: '12px',
@@ -115,7 +116,7 @@ export default function NotesPage() {
                 }}
               >
                 start learning →
-              </a>
+              </Link>
             )}
           </div>
         ) : (

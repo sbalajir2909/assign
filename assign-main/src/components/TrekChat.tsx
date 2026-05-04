@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useRef, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import type {
   ChatMessage, Phase, ValidationResult, KCNode, SSEMessage,
 } from '@/lib/types'
@@ -153,14 +154,22 @@ export default function TrekChat({
             if (event.topic_title) setTopicTitle(event.topic_title)
             if (event.kc_graph) {
               setKcGraph(event.kc_graph)
-              setCurrentKcIndex(0)
+              if (typeof event.current_kc_index === 'number') {
+                setCurrentKcIndex(event.current_kc_index)
+              } else {
+                setCurrentKcIndex(0)
+              }
             }
           }
 
           if (event.type === 'kc_graph' && event.kc_graph) {
             setKcGraph(event.kc_graph)
-            const inProgressIdx = event.kc_graph.findIndex(k => k.status === 'in_progress')
-            if (inProgressIdx >= 0) setCurrentKcIndex(inProgressIdx)
+            if (typeof event.current_kc_index === 'number') {
+              setCurrentKcIndex(event.current_kc_index)
+            } else {
+              const inProgressIdx = event.kc_graph.findIndex(k => k.status === 'in_progress')
+              if (inProgressIdx >= 0) setCurrentKcIndex(inProgressIdx)
+            }
           }
         }
       }
@@ -237,9 +246,9 @@ export default function TrekChat({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <a href="/" style={{ textDecoration: 'none' }}>
+            <Link href="/" style={{ textDecoration: 'none' }}>
               <span style={{ ...serif, fontSize: '20px', letterSpacing: '-0.5px' }}>assign</span>
-            </a>
+            </Link>
             <span style={{ ...mono, fontSize: '11px', border: '1.5px solid var(--border)', borderRadius: '4px', padding: '3px 8px' }}>
               trek
             </span>
