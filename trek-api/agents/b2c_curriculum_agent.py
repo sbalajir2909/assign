@@ -1,11 +1,11 @@
 """
 B2C Curriculum agent — wraps the existing curriculum pipeline.
-Converts validated_nodes → KCNode objects and persists to Supabase.
+Converts the sprint planner's core path → KCNode objects and persists to Supabase.
 
 Profile mapping:
   prior_knowledge  → knowledge_baseline (passed to build_graph)
   goal_type        → exit_condition (shapes KC graph focus)
-  weeks_available  → available_hours = weeks × 3 (3 hrs/week default pace)
+  weeks_available  → core/deferred partition size (≈ 2 KCs/week)
   prior_knowledge  → pre-known KCs placed first in kc_graph as already-mastered,
                      teaching starts at first new KC
 """
@@ -84,7 +84,11 @@ def _build_curriculum_profile(raw_profile: dict) -> dict:
     goal_type = raw_profile.get("goal_type", "other")
     goal_detail = raw_profile.get("goal_detail", f"understand {topic} end to end")
     prior_knowledge = raw_profile.get("prior_knowledge", [])
-    weeks_available = int(raw_profile.get("weeks_available", 4) or 4)
+    timeline = str(raw_profile.get("timeline", "") or "")
+    if goal_type == "deep_understanding" or "no deadline" in timeline.lower():
+        weeks_available = 999
+    else:
+        weeks_available = int(raw_profile.get("weeks_available", 4) or 4)
 
     # Exit condition encodes goal shape for the graph builder
     exit_template = _GOAL_EXIT_CONDITIONS.get(goal_type, _GOAL_EXIT_CONDITIONS["other"])
@@ -94,7 +98,7 @@ def _build_curriculum_profile(raw_profile: dict) -> dict:
     if prior_knowledge:
         summary = (
             "Student already knows: " + ", ".join(prior_knowledge) + ". "
-            "Skip or fast-track these topics in the curriculum."
+            "Keep them in the canonical map, but treat them as prior knowledge when sequencing."
         )
         probe_result = "strong" if len(prior_knowledge) >= 4 else "partial"
         probed_concept = prior_knowledge[0]
@@ -111,6 +115,7 @@ def _build_curriculum_profile(raw_profile: dict) -> dict:
             "probed_concept": probed_concept,
             "probe_result": probe_result,
         },
+        "weeks_available": weeks_available,
         "available_hours": float(weeks_available * 3),  # 3 hrs/week default pace
     }
 
@@ -138,6 +143,7 @@ async def run_b2c_curriculum(state: dict) -> dict:
                 "probed_concept": "",
                 "probe_result": "weak",
             },
+            "weeks_available": 4,
             "available_hours": 12.0,  # 4 weeks × 3 hrs default
         }
 
@@ -147,7 +153,7 @@ async def run_b2c_curriculum(state: dict) -> dict:
 
     result = await run_curriculum(curriculum_profile)
 
-    if result.get("error") or not result.get("validated_nodes"):
+    if result.get("error") or not result.get("core_path"):
         return {
             "pending_message": (
                 "I had trouble building your course. "
@@ -158,15 +164,16 @@ async def run_b2c_curriculum(state: dict) -> dict:
             "discovery_messages": [],
         }
 
-    validated_nodes = result["validated_nodes"]
+    core_nodes = result["core_path"]
+    deferred_nodes = result.get("deferred_nodes", [])
     topic_id = state["topic_id"]
     user_id = state["user_id"]
 
     # ── Separate pre-known from new KCs ──────────────────────────────────────
     # Pre-known KCs go FIRST in kc_graph so globalIdx < current_kc_index makes
     # the sidebar show them as already done.  Teaching starts at first new KC.
-    pre_known_nodes = [n for n in validated_nodes if _is_pre_known(n.get("title", ""), prior_knowledge)]
-    new_nodes       = [n for n in validated_nodes if not _is_pre_known(n.get("title", ""), prior_knowledge)]
+    pre_known_nodes = [n for n in core_nodes if _is_pre_known(n.get("title", ""), prior_knowledge)]
+    new_nodes       = [n for n in core_nodes if not _is_pre_known(n.get("title", ""), prior_knowledge)]
 
     if pre_known_nodes:
         print(f"[b2c_curriculum] {len(pre_known_nodes)} pre-known KC(s) detected: "
@@ -176,14 +183,22 @@ async def run_b2c_curriculum(state: dict) -> dict:
     n_pre_known = len(pre_known_nodes)
 
     # ── Build KCNode objects ──────────────────────────────────────────────────
+    runtime_ids = {
+        node.get("id"): str(uuid.uuid4())
+        for node in ordered_nodes
+    }
     kc_nodes: list[KCNode] = []
     for i, node in enumerate(ordered_nodes):
-        kc_id = str(uuid.uuid4())
+        kc_id = runtime_ids.get(node.get("id")) or str(uuid.uuid4())
         kc_nodes.append(KCNode(
             id=kc_id,
             title=node.get("title", f"Concept {i + 1}"),
             description=node.get("description") or node.get("why_needed", ""),
-            prerequisites=node.get("prerequisites", []),
+            prerequisites=[
+                runtime_ids[prereq_id]
+                for prereq_id in node.get("prerequisites", [])
+                if prereq_id in runtime_ids
+            ],
             order_index=i,
         ))
 
@@ -250,7 +265,7 @@ async def run_b2c_curriculum(state: dict) -> dict:
         topic=state.get("topic_title", topic_id),
         sprint_plan=result.get("sprint_plan", {}),
         gist=gist,
-        validated_nodes=validated_nodes,
+        validated_nodes=deferred_nodes,
         learner_profile=raw_profile or {},
         sources_hit=result.get("sources_hit", []),
     )
@@ -280,4 +295,5 @@ async def run_b2c_curriculum(state: dict) -> dict:
         "session_summary": None,
         "phase": next_phase,
         "pending_message": gist,
+        "unlock_next_concepts_enabled": True,
     }

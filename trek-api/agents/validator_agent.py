@@ -64,6 +64,25 @@ Output ONLY the JSON array. Nothing else.
 """
 
 
+def _normalize_prerequisites(nodes: list[dict]) -> None:
+    id_map = {n.get("id"): n.get("id") for n in nodes if n.get("id")}
+    title_map = {
+        (n.get("title") or "").strip().lower(): n.get("id")
+        for n in nodes
+        if n.get("title") and n.get("id")
+    }
+    for node in nodes:
+        normalized: list[str] = []
+        for prereq in node.get("prerequisites", []):
+            if not isinstance(prereq, str):
+                continue
+            key = prereq.strip()
+            mapped = id_map.get(key) or title_map.get(key.lower())
+            if mapped and mapped != node.get("id") and mapped not in normalized:
+                normalized.append(mapped)
+        node["prerequisites"] = normalized
+
+
 async def validate_graph(
     topic: str,
     exit_condition: str,
@@ -120,10 +139,10 @@ async def validate_graph(
             corrected = verdict.get("corrected_node")
             if corrected:
                 # Clamp values after correction
-                corrected["complexity"] = max(0.0, min(1.0, 
-                    float(corrected.get("complexity", 0.5))))
-                corrected["estimated_hours"] = max(0.5, 
-                    float(corrected.get("estimated_hours", 1.0)))
+                corrected["complexity"] = int(max(1, min(5,
+                    round(float(corrected.get("complexity", 3))))))
+                corrected["estimated_hours"] = max(0.5, min(2.0,
+                    float(corrected.get("estimated_hours", 1.0))))
                 validated_nodes.append(corrected)
             elif node_id in original_map:
                 validated_nodes.append(original_map[node_id])
@@ -137,6 +156,7 @@ async def validate_graph(
             if verdict.get("needs_research"):
                 needs_research.append(node_id)
 
+    _normalize_prerequisites(validated_nodes)
     # Fix broken prerequisite references
     valid_ids = {n["id"] for n in validated_nodes}
     for node in validated_nodes:

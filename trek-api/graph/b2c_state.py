@@ -85,6 +85,7 @@ class TrekStateB2C(TypedDict):
     # Messages to send to frontend
     pending_message: Optional[str]
     stream_tokens: bool          # always True in production
+    unlock_next_concepts_enabled: bool
 
     # Discovery phase
     discovery_messages: List[dict]

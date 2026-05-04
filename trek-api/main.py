@@ -264,6 +264,7 @@ def _b2c_initial_state(user_id: str, session_id: str, syllabus_topics: Optional[
         "notes_generated": [],
         "pending_message": None,
         "stream_tokens": True,
+        "unlock_next_concepts_enabled": False,
         "discovery_messages": [],
         "discovery_complete": False,
         "_discovery_profile": None,

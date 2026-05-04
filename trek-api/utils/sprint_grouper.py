@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from heapq import heappop, heappush
 
 
 @dataclass
@@ -12,7 +13,7 @@ class Sprint:
 def compute_cognitive_load(concepts: list) -> float:
     total = 0.0
     for c in concepts:
-        complexity = c.get("complexity", 0.5)
+        complexity = _normalized_complexity(c.get("complexity", 3))
         hours = c.get("estimated_hours", 1.0)
         if complexity >= 0.8:
             total += hours * 1.5
@@ -24,58 +25,92 @@ def compute_cognitive_load(concepts: list) -> float:
 
 
 def has_high_complexity_conflict(concepts: list) -> bool:
-    high = [c for c in concepts if c.get("complexity", 0) >= 0.8]
+    high = [c for c in concepts if _normalized_complexity(c.get("complexity", 3)) >= 0.8]
     return len(high) >= 2
+
+
+def _normalized_complexity(value: float | int) -> float:
+    number = float(value or 0)
+    if number < 1.0:
+        return max(0.0, number)
+    return max(0.0, min(1.0, number / 5.0))
 
 
 def topological_sort(nodes: list) -> list:
     node_map = {n["id"]: n for n in nodes}
-    visited = set()
-    sorted_nodes = []
-
-    def visit(node_id: str):
-        if node_id in visited:
-            return
-        visited.add(node_id)
-        node = node_map.get(node_id)
-        if not node:
-            return
-        for prereq_id in node.get("prerequisites", []):
-            visit(prereq_id)
-        sorted_nodes.append(node)
+    indegree = {n["id"]: 0 for n in nodes}
+    children = {n["id"]: [] for n in nodes}
+    original_order = {n["id"]: idx for idx, n in enumerate(nodes)}
+    levels = {n["id"]: 0 for n in nodes}
 
     for node in nodes:
-        visit(node["id"])
+        for prereq_id in node.get("prerequisites", []):
+            if prereq_id in node_map:
+                indegree[node["id"]] += 1
+                children[prereq_id].append(node["id"])
+
+    heap: list[tuple[int, float, int, str]] = []
+    for node_id, degree in indegree.items():
+        if degree == 0:
+            node = node_map[node_id]
+            heappush(
+                heap,
+                (levels[node_id], _normalized_complexity(node.get("complexity", 3)), original_order[node_id], node_id),
+            )
+
+    sorted_nodes = []
+    seen = set()
+
+    while heap:
+        _, _, _, node_id = heappop(heap)
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        sorted_nodes.append(node_map[node_id])
+        for child_id in children[node_id]:
+            levels[child_id] = max(levels[child_id], levels[node_id] + 1)
+            indegree[child_id] -= 1
+            if indegree[child_id] == 0:
+                child = node_map[child_id]
+                heappush(
+                    heap,
+                    (levels[child_id], _normalized_complexity(child.get("complexity", 3)), original_order[child_id], child_id),
+                )
+
+    if len(sorted_nodes) != len(nodes):
+        leftovers = [
+            node for node in nodes
+            if node["id"] not in seen
+        ]
+        leftovers.sort(key=lambda node: (levels[node["id"]], _normalized_complexity(node.get("complexity", 3)), original_order[node["id"]]))
+        sorted_nodes.extend(leftovers)
 
     return sorted_nodes
 
 
-def prune_by_time(sorted_nodes: list, available_hours: float) -> tuple[list, list]:
-    total_hours = sum(n.get("estimated_hours", 1.0) for n in sorted_nodes)
-
-    if total_hours <= available_hours:
+def partition_core_and_deferred(sorted_nodes: list, weeks_available: int | None) -> tuple[list, list]:
+    total_kcs = len(sorted_nodes)
+    if weeks_available is None:
         return sorted_nodes, []
 
-    all_prereqs = set()
+    if weeks_available >= 999:
+        return sorted_nodes, []
+
+    target = min(total_kcs, max(0, int(weeks_available) * 2))
+    selected_ids = {
+        node["id"]
+        for node in sorted_nodes
+        if not node.get("prerequisites")
+    }
+
     for node in sorted_nodes:
-        for p in node.get("prerequisites", []):
-            all_prereqs.add(p)
-
-    non_critical = [n for n in sorted_nodes if n["id"] not in all_prereqs]
-    non_critical.sort(key=lambda x: x.get("complexity", 0))
-
-    kept = list(sorted_nodes)
-    cut = []
-
-    for node in non_critical:
-        current_total = sum(n.get("estimated_hours", 1.0) for n in kept)
-        if current_total > available_hours:
-            kept.remove(node)
-            cut.append(node)
-        else:
+        if len(selected_ids) >= target and target > 0:
             break
+        selected_ids.add(node["id"])
 
-    return kept, cut
+    core_path = [node for node in sorted_nodes if node["id"] in selected_ids]
+    deferred = [node for node in sorted_nodes if node["id"] not in selected_ids]
+    return core_path, deferred
 
 
 def group_into_sprints(nodes: list, max_sprint_load: float = 6.0) -> list[Sprint]:
@@ -118,13 +153,14 @@ def group_into_sprints(nodes: list, max_sprint_load: float = 6.0) -> list[Sprint
 
 def generate_sprint_plan(
     validated_nodes: list,
-    available_hours: float,
+    weeks_available: int | None,
     topic: str,
     exit_condition: str,
+    available_hours: float | None = None,
 ) -> dict:
     sorted_nodes = topological_sort(validated_nodes)
-    kept_nodes, cut_nodes = prune_by_time(sorted_nodes, available_hours)
-    sprints = group_into_sprints(kept_nodes)
+    core_path, deferred_nodes = partition_core_and_deferred(sorted_nodes, weeks_available)
+    sprints = group_into_sprints(core_path)
 
     sprint_data = []
     for sprint in sprints:
@@ -140,10 +176,16 @@ def generate_sprint_plan(
     return {
         "topic": topic,
         "exit_condition": exit_condition,
+        "weeks_available": weeks_available,
         "total_sprints": len(sprints),
         "total_hours": round(total_hours, 1),
         "available_hours": available_hours,
         "sprints": sprint_data,
-        "cut_nodes": cut_nodes,
-        "cut_count": len(cut_nodes),
+        "core_path": core_path,
+        "core_count": len(core_path),
+        "deferred_nodes": deferred_nodes,
+        "deferred_count": len(deferred_nodes),
+        # Backward-compatible aliases for older consumers that still read cut_*.
+        "cut_nodes": deferred_nodes,
+        "cut_count": len(deferred_nodes),
     }

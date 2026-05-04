@@ -34,13 +34,19 @@ class _FakeSupabase:
 @pytest.mark.asyncio
 async def test_preknown_mastered_kc_gets_sm2_schedule(monkeypatch):
     fake_supabase = _FakeSupabase()
+    saved_roadmap = {}
 
     async def fake_run_curriculum(profile):
         return {
-            "validated_nodes": [{
+            "core_path": [{
                 "title": "Hash Maps",
                 "description": "Key-value lookup",
                 "prerequisites": [],
+            }],
+            "deferred_nodes": [{
+                "title": "Collision Resolution",
+                "description": "Handle collisions",
+                "prerequisites": ["Hash Maps"],
             }],
             "gist": "Built your course.",
             "sprint_plan": {},
@@ -48,6 +54,7 @@ async def test_preknown_mastered_kc_gets_sm2_schedule(monkeypatch):
         }
 
     async def fake_save_roadmap(**kwargs):
+        saved_roadmap.update(kwargs)
         return "roadmap-1"
 
     monkeypatch.setattr(curriculum, "supabase", fake_supabase)
@@ -77,4 +84,19 @@ async def test_preknown_mastered_kc_gets_sm2_schedule(monkeypatch):
     assert student_rows[0]["sm2_interval"] == 1
     assert student_rows[0]["sm2_repetitions"] == 1
     assert student_rows[0]["sm2_next_review"]
+    assert saved_roadmap["validated_nodes"][0]["title"] == "Collision Resolution"
+    assert result["unlock_next_concepts_enabled"] is True
     assert result["phase"] in ("teaching", "complete")
+
+
+def test_deep_understanding_sets_weeks_available_to_999():
+    profile = curriculum._build_curriculum_profile({
+        "topic": "Algorithms",
+        "goal_type": "deep_understanding",
+        "goal_detail": "understand the internals",
+        "prior_knowledge": [],
+        "timeline": "no deadline, just want to go deep",
+        "weeks_available": 2,
+    })
+
+    assert profile["weeks_available"] == 999

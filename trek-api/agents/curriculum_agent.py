@@ -16,9 +16,10 @@ Write a warm, direct course preview. Cover:
 1. What they will be able to do by the end
 2. What the course emphasizes and why
 3. How many sprints, total hours
-4. What was cut (if anything) and why
+4. What is deferred (if anything) and why
 
-Be honest if content was cut due to time constraints.
+Be honest if some concepts are deferred due to timeline constraints.
+Nothing is cut forever — deferred concepts stay in the roadmap for later unlock.
 Talk like a sharp Gen Z friend. No bullet points. Conversational prose.
 Keep it under 150 words.
 """
@@ -41,8 +42,10 @@ Learner profile: {json.dumps(learner_profile)}
 Sprint plan: {json.dumps({
     "total_sprints": sprint_plan["total_sprints"],
     "total_hours": sprint_plan["total_hours"],
+    "weeks_available": sprint_plan.get("weeks_available"),
     "available_hours": sprint_plan["available_hours"],
-    "cut_count": sprint_plan["cut_count"],
+    "core_count": sprint_plan.get("core_count"),
+    "deferred_count": sprint_plan.get("deferred_count", 0),
     "sprints": [
         {
             "sprint_number": s["sprint_number"],
@@ -51,7 +54,7 @@ Sprint plan: {json.dumps({
         }
         for s in sprint_plan["sprints"]
     ],
-    "cut_nodes": [c["title"] for c in sprint_plan.get("cut_nodes", [])],
+    "deferred_nodes": [c["title"] for c in sprint_plan.get("deferred_nodes", [])],
 })}
 
 Write the course preview now.
@@ -76,13 +79,14 @@ async def run_curriculum(learner_profile: dict) -> dict:
     2. Graph builder — synthesize weighted dependency graph
     3. Validator — scrutinize every node, reject weak ones
     4. Re-search — targeted search for any rejected nodes that need it
-    5. Sprint grouper — group into time-constrained sprints
+    5. Sprint grouper — partition canonical graph into core path + deferred set
     6. Gist generator — human-readable course preview
     """
     topic = learner_profile["topic"]
     exit_condition = learner_profile["exit_condition"]
     knowledge_baseline = learner_profile["knowledge_baseline"]
     available_hours = learner_profile["available_hours"]
+    weeks_available = learner_profile.get("weeks_available")
 
     # Syllabus override — if the student uploaded a syllabus, lock topic order
     syllabus_topics = learner_profile.get("syllabus_topics")
@@ -156,14 +160,15 @@ async def run_curriculum(learner_profile: dict) -> dict:
     print("[curriculum] generating sprint plan...")
     sprint_plan = generate_sprint_plan(
         validated_nodes=validated_nodes,
-        available_hours=available_hours,
+        weeks_available=weeks_available,
         topic=topic,
         exit_condition=exit_condition,
+        available_hours=available_hours,
     )
 
     print(f"[curriculum] {sprint_plan['total_sprints']} sprints, "
           f"{sprint_plan['total_hours']}h total, "
-          f"{sprint_plan['cut_count']} concepts cut")
+          f"{sprint_plan['deferred_count']} concepts deferred")
 
     # ── Step 6: Gist ──────────────────────────────────────────────
     print("[curriculum] generating course preview...")
@@ -174,7 +179,10 @@ async def run_curriculum(learner_profile: dict) -> dict:
 
     return {
         "sprint_plan": sprint_plan,
-        "validated_nodes": validated_nodes,
+        "core_path": sprint_plan["core_path"],
+        "deferred_nodes": sprint_plan["deferred_nodes"],
+        "validated_nodes": sprint_plan["deferred_nodes"],
+        "canonical_nodes": validated_nodes,
         "gist": gist,
         "evidence_strength": search_data["evidence_strength"],
         "graph_confidence": validation["graph_confidence"],

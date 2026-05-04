@@ -31,7 +31,7 @@ async def test():
     print(f"\nSprint plan:")
     print(f"  Total sprints: {result['sprint_plan']['total_sprints']}")
     print(f"  Total hours: {result['sprint_plan']['total_hours']}")
-    print(f"  Cut nodes: {result['sprint_plan']['cut_count']}")
+    print(f"  Deferred nodes: {result['sprint_plan']['deferred_count']}")
 
     for sprint in result["sprint_plan"]["sprints"]:
         print(f"\n  Sprint {sprint['sprint_number']} "
