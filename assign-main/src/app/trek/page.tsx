@@ -291,42 +291,6 @@ function TrekPageInner() {
     return () => document.removeEventListener('mouseup', handleMouseUp)
   }, [])
 
-  // ── Init ───────────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const init = async () => {
-      const { data: { session } } = await supabase.auth.getSession()
-      let uid = session?.user?.id || ''
-
-      if (!uid) {
-        const { data, error } = await supabase.auth.signInAnonymously()
-        if (error) {
-          console.error('[trek] anonymous sign-in failed', error)
-        }
-        uid = data.user?.id || ''
-      }
-
-      if (!uid) {
-        setAuthError('sign in to start trek — anonymous session setup failed.')
-        setMessages([{ role: 'assistant', content: 'sign in to start trek — anonymous session setup failed.' }])
-        setShowUploadZone(false)
-        return
-      }
-
-      setAuthError('')
-      setUserId(uid)
-
-      const resumeId = searchParams.get('resume')
-      if (resumeId) {
-        setResuming(true)
-        await loadRoadmap(resumeId, uid)
-        setResuming(false)
-      } else {
-        setShowUploadZone(true)
-      }
-    }
-    init()
-  }, [loadRoadmap, searchParams])
-
   // ── Start trek-api session ─────────────────────────────────────────────────
   const startSession = async (uid: string, syllabusB64?: string, mimeType?: string) => {
     if (!uid) {
@@ -446,6 +410,42 @@ function TrekPageInner() {
       }
     }
   }, [userId])
+
+  // ── Init ───────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const init = async () => {
+      const { data: { session } } = await supabase.auth.getSession()
+      let uid = session?.user?.id || ''
+
+      if (!uid) {
+        const { data, error } = await supabase.auth.signInAnonymously()
+        if (error) {
+          console.error('[trek] anonymous sign-in failed', error)
+        }
+        uid = data.user?.id || ''
+      }
+
+      if (!uid) {
+        setAuthError('sign in to start trek — anonymous session setup failed.')
+        setMessages([{ role: 'assistant', content: 'sign in to start trek — anonymous session setup failed.' }])
+        setShowUploadZone(false)
+        return
+      }
+
+      setAuthError('')
+      setUserId(uid)
+
+      const resumeId = searchParams.get('resume')
+      if (resumeId) {
+        setResuming(true)
+        await loadRoadmap(resumeId, uid)
+        setResuming(false)
+      } else {
+        setShowUploadZone(true)
+      }
+    }
+    init()
+  }, [loadRoadmap, searchParams])
 
   const fetchReport = useCallback(async () => {
     if (!sessionId) return
