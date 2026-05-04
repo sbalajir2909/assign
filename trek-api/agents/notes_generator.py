@@ -13,8 +13,10 @@ Note structure:
 - full_text: concatenated plain text for search and context loading
 """
 
+import asyncio
 import json
 from utils.model_router import get_model_name
+from utils.embeddings import embed_text
 from db.client import supabase
 
 NOTES_SYSTEM_PROMPT = """You are generating a study note for a student who just finished learning a concept.
@@ -112,6 +114,49 @@ async def generate_note(state: dict, client) -> dict:
         }, on_conflict="user_id,kc_id").execute()
     except Exception as e:
         print(f"[notes_generator] Failed to persist note: {e}")
+
+    # ── RAG write path ────────────────────────────────────────────────────────
+    # Embed and store the note so context_builder can retrieve semantically
+    # relevant prior teaching moments via match_concept_chunks().
+    # Failures are non-fatal — the teaching loop must not be blocked by a
+    # transient embedding or DB error.
+
+    _rag_base = {
+        "user_id": state["user_id"],
+        "roadmap_id": state.get("roadmap_id"),   # nullable; set after curriculum build
+        "concept_index": kc.order_index,
+        "concept_title": kc.title,
+    }
+
+    # Chunk 1 — summary: title + paragraph summary + 3 key points
+    summary_text = (
+        f"{kc.title}\n\n{note_data['summary']}\n\n"
+        + "\n".join(f"- {p}" for p in note_data["key_points"])
+    )
+    try:
+        summary_vec = await asyncio.to_thread(embed_text, summary_text)
+        await supabase.table("concept_rag_chunks").insert({
+            **_rag_base,
+            "content": summary_text,
+            "chunk_type": "summary",
+            "embedding": summary_vec,
+        }).execute()
+    except Exception as e:
+        print(f"[notes_generator] Failed to store summary chunk for '{kc.title}': {e}")
+
+    # Chunk 2 — mental_model: student's own analogy (only if one was recorded)
+    analogy = note_data.get("student_analogy", "")
+    if analogy:
+        try:
+            analogy_vec = await asyncio.to_thread(embed_text, analogy)
+            await supabase.table("concept_rag_chunks").insert({
+                **_rag_base,
+                "content": analogy,
+                "chunk_type": "mental_model",
+                "embedding": analogy_vec,
+            }).execute()
+        except Exception as e:
+            print(f"[notes_generator] Failed to store analogy chunk for '{kc.title}': {e}")
 
     # Determine next KC
     next_index = state["current_kc_index"] + 1

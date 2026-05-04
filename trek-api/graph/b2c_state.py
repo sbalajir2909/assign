@@ -39,6 +39,7 @@ class TrekStateB2C(TypedDict):
     topic_id: str
     topic_title: str
     session_id: str
+    roadmap_id: Optional[str]   # set after curriculum build; used by frontend dashboard
 
     # Phase control
     phase: Phase
@@ -66,11 +67,20 @@ class TrekStateB2C(TypedDict):
     recent_turns: List[dict]     # last 3 turns always included verbatim
     session_summary: Optional[str]
 
+    # RAG retrieval — semantically similar prior teaching moments for this student.
+    # Populated by context_builder via match_concept_chunks; injected into the
+    # teaching agent prompt before TEACHING_SYSTEM_PROMPT.
+    retrieved_context: List[str]
+
     # Flags accumulated this session
     flags_this_session: List[dict]   # [{kc_id, flag_type, flag_reason}]
 
     # Notes generated this session
     notes_generated: List[str]   # kc_ids with notes
+
+    # Mastery gate signal — set True by teaching node, reset False after validation
+    # main.py reads this to decide whether to accept an explanation or re-teach
+    ready_for_mastery_check: bool
 
     # Messages to send to frontend
     pending_message: Optional[str]

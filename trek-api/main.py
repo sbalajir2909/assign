@@ -12,6 +12,25 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 
+# ── Startup env-var validation ────────────────────────────────────────────────
+
+_REQUIRED_ENV_VARS = [
+    "GROQ_API_KEY",
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "TAVILY_API_KEY",
+    "DATABASE_URL",
+]
+
+def _check_required_env_vars() -> None:
+    missing = [v for v in _REQUIRED_ENV_VARS if not os.environ.get(v)]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables — server will not start:\n"
+            + "\n".join(f"  • {v}" for v in missing)
+        )
+
+
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 
 b2c_graph = None
@@ -21,19 +40,11 @@ _b2c_pool = None  # postgres connection pool — closed on shutdown
 async def lifespan(app: FastAPI):
     global b2c_graph, _b2c_pool
 
-    conn_str = os.getenv("SUPABASE_DB_CONNECTION_STRING", "")
-    if conn_str:
-        try:
-            from graph.b2c_graph import build_b2c_graph
-            b2c_graph, _b2c_pool = await build_b2c_graph(conn_str)
-            print("[startup] B2C graph initialized (PostgresSaver)")
-        except Exception as e:
-            print(f"[startup] B2C graph init failed: {e}")
+    _check_required_env_vars()
 
-    if not b2c_graph:
-        from graph.b2c_graph import build_b2c_graph_sync
-        b2c_graph = build_b2c_graph_sync()
-        print("[startup] B2C graph initialized (MemorySaver)")
+    from graph.b2c_graph import build_b2c_graph
+    b2c_graph, _b2c_pool = await build_b2c_graph(os.environ["DATABASE_URL"])
+    print("[startup] B2C graph initialized (PostgresSaver)")
 
     yield
 
@@ -74,7 +85,9 @@ def _b2c_initial_state(user_id: str, session_id: str) -> dict:
         "topic_id": "",
         "topic_title": "",
         "session_id": session_id,
+        "roadmap_id": None,
         "phase": "discovery",
+        "ready_for_mastery_check": False,
         "current_kc_index": 0,
         "current_kc_id": None,
         "kc_graph": [],
@@ -88,6 +101,7 @@ def _b2c_initial_state(user_id: str, session_id: str) -> dict:
         "last_passed": None,
         "bkt_state": {},
         "context_window": [],
+        "retrieved_context": [],
         "recent_turns": [],
         "session_summary": None,
         "flags_this_session": [],
@@ -201,7 +215,7 @@ async def b2c_message(body: B2CTrekMessage):
                         {"id": kc.id, "title": kc.title, "status": kc.status, "p_learned": result.get("bkt_state", {}).get(kc.id, 0.0), "order_index": kc.order_index}
                         for kc in result["kc_graph"]
                     ]
-                    yield f"data: {json.dumps({'type': 'curriculum_ready', 'topic_id': result.get('topic_id', ''), 'topic_title': result.get('topic_title', ''), 'kc_graph': kc_summary})}\n\n"
+                    yield f"data: {json.dumps({'type': 'curriculum_ready', 'topic_id': result.get('topic_id', ''), 'topic_title': result.get('topic_title', ''), 'roadmap_id': result.get('roadmap_id', ''), 'kc_graph': kc_summary})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done'})}\n\n"
 

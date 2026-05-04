@@ -9,10 +9,12 @@ Node execution order per KC:
   → ... repeat per KC until complete
 
 PostgresSaver is used — sessions persist across server restarts.
-Falls back to MemorySaver if postgres connection fails.
+MemorySaver is available only via build_b2c_graph_sync() for tests.
 """
 
 from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 from graph.b2c_state import TrekStateB2C
 from utils.model_router import get_llm_client
 
@@ -72,31 +74,22 @@ def after_notes(state: TrekStateB2C) -> str:
 
 async def build_b2c_graph(conn_string: str):
     """
-    Builds and compiles the B2C graph with PostgresSaver.
+    Builds and compiles the B2C graph with PostgresSaver backed by a connection pool.
     Returns (compiled_graph, pool) — pool must be closed on app shutdown.
+
+    Raises on any connection or setup failure — do not swallow this error.
+    Sessions must persist across restarts; MemorySaver is not an acceptable fallback.
     """
-    checkpointer = None
-    pool = None
-
-    try:
-        from psycopg_pool import AsyncConnectionPool
-        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-        pool = AsyncConnectionPool(
-            conninfo=conn_string,
-            max_size=5,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-            open=False,
-        )
-        await pool.open()
-        checkpointer = AsyncPostgresSaver(pool)
-        await checkpointer.setup()
-        print("[b2c_graph] PostgresSaver initialized")
-    except Exception as e:
-        print(f"[b2c_graph] PostgresSaver failed ({e}), falling back to MemorySaver")
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
-        pool = None
+    pool = AsyncConnectionPool(
+        conninfo=conn_string,
+        max_size=5,
+        kwargs={"autocommit": True, "prepare_threshold": 0},
+        open=False,
+    )
+    await pool.open()
+    checkpointer = AsyncPostgresSaver(pool)
+    await checkpointer.setup()
+    print("[b2c_graph] PostgresSaver initialized")
 
     builder = StateGraph(TrekStateB2C)
 

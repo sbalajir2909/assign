@@ -11,6 +11,8 @@ Priority order (700 token budget, strict):
 5. Relevant semantic memory (analogies that worked) — ~100 tokens
 """
 
+import asyncio
+from utils.embeddings import embed_text
 from db.client import supabase
 
 TOKEN_BUDGET = 700
@@ -113,4 +115,25 @@ async def build_context(state: dict) -> dict:
         except Exception as e:
             print(f"[context_builder] Failed to load semantic memory: {e}")
 
-    return {"context_window": messages}
+    # 6. RAG retrieval — semantically similar prior teaching moments from
+    #    concept_rag_chunks, written after each KC mastery by notes_generator.
+    #    Returned as a separate list; the teaching agent injects it before its
+    #    system prompt so it does not compete with the 700-token context budget.
+    retrieved_context: list[str] = []
+    if kc and user_id:
+        try:
+            query_text = f"{kc.title}: {kc.description}" if kc.description else kc.title
+            query_vec = await asyncio.to_thread(embed_text, query_text)
+            rag_result = await supabase.rpc("match_concept_chunks", {
+                "query_embedding": query_vec,
+                "match_user_id": user_id,
+                "match_threshold": 0.72,
+                "match_count": 4,
+            }).execute()
+            if rag_result.data:
+                retrieved_context = [row["content"] for row in rag_result.data]
+                print(f"[context_builder] RAG: {len(retrieved_context)} chunk(s) retrieved for '{kc.title}'")
+        except Exception as e:
+            print(f"[context_builder] RAG lookup failed for '{getattr(kc, 'title', '?')}': {e}")
+
+    return {"context_window": messages, "retrieved_context": retrieved_context}

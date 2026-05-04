@@ -7,6 +7,7 @@ import uuid
 from agents.curriculum_agent import run_curriculum
 from graph.b2c_state import KCNode
 from db.client import supabase
+from db.roadmaps import save_roadmap
 
 
 async def run_b2c_curriculum(state: dict) -> dict:
@@ -90,7 +91,21 @@ async def run_b2c_curriculum(state: dict) -> dict:
         f"Let's start with the first one."
     )
 
+    # Persist curriculum to roadmaps table so the frontend dashboard can list
+    # and resume this session.  This must succeed — let exceptions propagate.
+    roadmap_id = await save_roadmap(
+        user_id=user_id,
+        topic=state.get("topic_title", topic_id),
+        sprint_plan=result.get("sprint_plan", {}),
+        gist=gist,
+        validated_nodes=validated_nodes,
+        learner_profile=state.get("_discovery_profile") or {},
+        sources_hit=result.get("sources_hit", []),
+    )
+    print(f"[b2c_curriculum] roadmap persisted: {roadmap_id}")
+
     return {
+        "roadmap_id": roadmap_id,
         "kc_graph": kc_nodes,
         "total_kcs": len(kc_nodes),
         "current_kc_index": 0,

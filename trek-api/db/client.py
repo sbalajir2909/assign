@@ -53,14 +53,26 @@ class _AsyncSupabase:
             from supabase import create_client
             url = (
                 os.environ.get("SUPABASE_URL")
-                or os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "")
+                or os.environ.get("NEXT_PUBLIC_SUPABASE_URL")
+                or ""
             )
             key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+            if not url:
+                raise RuntimeError(
+                    "Missing env var: SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL)"
+                )
+            if not key:
+                raise RuntimeError(
+                    "Missing env var: SUPABASE_SERVICE_ROLE_KEY"
+                )
             self._client = create_client(url, key)
         return self._client
 
     def table(self, name: str) -> _AsyncQuery:
         return _AsyncQuery(self._get().table(name))
+
+    def rpc(self, fn_name: str, params: dict | None = None) -> _AsyncQuery:
+        return _AsyncQuery(self._get().rpc(fn_name, params or {}))
 
 
 supabase = _AsyncSupabase()

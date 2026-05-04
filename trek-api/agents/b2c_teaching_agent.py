@@ -58,7 +58,21 @@ async def run_teaching(state: dict, client) -> dict:
             "Before teaching, briefly correct the misconception directly and clearly."
         )
 
+    # Prepend semantically retrieved prior teaching moments when available.
+    # These come from concept_rag_chunks written after previous KC masteries.
+    # Placed before TEACHING_SYSTEM_PROMPT so they read as background knowledge,
+    # not as instructions.
+    prior_moments = state.get("retrieved_context", [])
+    retrieved_system: list[dict] = []
+    if prior_moments:
+        joined = "\n---\n".join(prior_moments)
+        retrieved_system = [{"role": "system", "content": (
+            "Relevant prior teaching moments for this student:\n" + joined
+        )}]
+        print(f"[teaching_agent] Injecting {len(prior_moments)} RAG chunk(s) into prompt")
+
     messages = [
+        *retrieved_system,
         {"role": "system", "content": TEACHING_SYSTEM_PROMPT},
         *state.get("context_window", []),
         {"role": "user", "content": (
@@ -87,4 +101,5 @@ async def run_teaching(state: dict, client) -> dict:
         "phase": "awaiting_explanation",
         "pending_message": full_text,
         "recent_turns": recent,
+        "ready_for_mastery_check": True,
     }

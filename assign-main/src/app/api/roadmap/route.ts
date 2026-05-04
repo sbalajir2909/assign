@@ -1,20 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 
-const getSupabase = () => createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-)
+const getSupabase = () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_KEY
+  if (!url) throw new Error('Missing env var: NEXT_PUBLIC_SUPABASE_URL')
+  if (!key) throw new Error('Missing env var: SUPABASE_SERVICE_KEY')
+  return createClient(url, key)
+}
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const roadmapId = searchParams.get('id')
     const userId = searchParams.get('userId')
-
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL) {
-      return NextResponse.json({ error: 'missing SUPABASE_URL' }, { status: 500 })
-    }
 
     if (roadmapId) {
       const { data: roadmap, error } = await getSupabase()
