@@ -201,13 +201,15 @@ async def b2c_message(body: B2CTrekMessage):
                     disc_msgs = list(state.get("discovery_messages", []))
                     disc_msgs.append({"role": "user", "content": body.message})
                     patch["discovery_messages"] = disc_msgs
+                    await b2c_graph.aupdate_state(config, patch)
                 else:
                     recent = list(state.get("recent_turns", []))
                     recent.append({"role": "user", "content": body.message})
                     patch["recent_turns"] = recent[-6:]
 
-                await b2c_graph.aupdate_state(config, patch)
-                result = await b2c_graph.ainvoke(None, config=config)
+                # For discovery, persist the appended user turn, but also pass
+                # it into ainvoke so this run sees it even with PostgresSaver.
+                result = await b2c_graph.ainvoke(patch, config=config)
 
                 if result.get("pending_message"):
                     yield f"data: {json.dumps({'type': 'message', 'content': result['pending_message'], 'phase': result.get('phase', phase)})}\n\n"
